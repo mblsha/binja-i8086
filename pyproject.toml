@@ -1,0 +1,33 @@
+[project]
+name = "binja-i8086"
+version = "0.1.0"
+description = "Intel 8086 architecture plugin for Binary Ninja"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE-0BSD.txt" }
+authors = [
+  { name = "whitequark" },
+]
+dependencies = []
+
+[tool.uv]
+package = false
+dev-dependencies = [
+  "pytest>=8.3",
+  "pytest-cov>=5.0",
+  "binja-test-mocks @ git+https://github.com/mblsha/binja-test-mocks.git",
+]
+
+[tool.pytest.ini_options]
+addopts = "--cov=. --cov-report=term-missing --cov-report=xml --cov-fail-under=80"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["."]
+omit = [
+  "tests/*",
+]
+
+[tool.coverage.report]
+skip_covered = false
+show_missing = true

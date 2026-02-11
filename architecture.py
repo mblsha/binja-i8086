@@ -3,7 +3,10 @@ from binaryninja.enums import Endianness, FlagRole, LowLevelILFlagCondition
 from binaryninja.types import Type
 from binaryninja.log import log_error
 
-from . import mc
+try:
+    from . import mc
+except ImportError:
+    import mc
 
 
 __all__ = ['Intel8086']

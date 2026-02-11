@@ -1,3 +1,4 @@
+import builtins
 from functools import reduce
 from binaryninja.lowlevelil import LLIL_TEMP
 
@@ -54,9 +55,9 @@ class Instruction(object):
         il.append(il.unimplemented())
 
     def _lift_phys_addr(self, il, seg, disp):
-        if seg in il.arch.regs:
+        if isinstance(seg, builtins.str) and seg in il.arch.regs:
             seg = il.reg(2, seg)
-        if disp in il.arch.regs:
+        if isinstance(disp, builtins.str) and disp in il.arch.regs:
             disp = il.reg(2, disp)
         base = il.shift_left(3, seg, il.const(1, 4))
         phys = il.add(3, base, disp)
