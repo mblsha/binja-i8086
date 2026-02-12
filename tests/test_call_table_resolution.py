@@ -96,3 +96,39 @@ def test_call_near_rm_cs_table_zero_entry_stays_indirect() -> None:
     target_expr = _lift_call_expr(data, addr, view)
 
     assert target_expr.op != "CONST_PTR.l"
+
+def test_call_near_rm_cs_table_prefers_page_base_over_overlay_segment() -> None:
+    # 2E FF 16 04 30 => call word [cs:0x3004]
+    # Runtime images can have a broad mapped segment plus narrower overlay segments.
+    # Use the 64K page base (0x10000 here), not the overlay start (0x16000).
+    data = bytes.fromhex("2eff160430")
+    addr = 0x1A338
+    view = FakeView(
+        {0x13004: 0x29, 0x13005: 0x3F},
+        segments=[FakeSegment(0x16000, 0x1B000), FakeSegment(0x0, 0x50000)],
+    )
+
+    target_expr = _lift_call_expr(data, addr, view)
+
+    assert target_expr.op == "CONST_PTR.l"
+    assert target_expr.ops == [0x13F29]
+
+def test_call_near_rm_cs_table_resolves_from_il_view_when_source_view_missing() -> None:
+    # Some BN analysis paths populate il.view but do not expose source_function.view.
+    data = bytes.fromhex("2eff160430")
+    addr = 0x1A338
+    view = FakeView({0x13004: 0x29, 0x13005: 0x3F}, segments=[FakeSegment(0x10000, 0x20000)])
+
+    arch = Intel8086()
+    il = MockLowLevelILFunction(arch)
+    il.view = view
+
+    length = arch.get_instruction_low_level_il(data, addr, il)
+    assert length == len(data)
+
+    call_expr = next((expr for expr in il.ils if expr.op == "CALL"), None)
+    assert call_expr is not None
+    target_expr = call_expr.ops[0]
+    assert target_expr.op == "CONST_PTR.l"
+    assert target_expr.ops == [0x13F29]
+
