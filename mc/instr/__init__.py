@@ -17,6 +17,15 @@ a20_gate = True
 
 class Instruction(object):
     opcodes = {}
+    _default_ret_status_flags = ("c", "p", "a", "z", "s", "o")
+    _default_ret_flag_shadow_regs = {
+        "c": "rc",
+        "p": "rp",
+        "a": "ra",
+        "z": "rz",
+        "s": "rs",
+        "o": "ro",
+    }
 
     def __new__(cls, decoder=None):
         if decoder is None:
@@ -64,6 +73,115 @@ class Instruction(object):
         if a20_gate:
             phys = il.and_expr(3, il.const(3, 0xfffff), phys)
         return phys
+
+    def _view_from_il(self, il):
+        try:
+            source_function = getattr(il, "source_function", None)
+            if source_function is not None:
+                view = getattr(source_function, "view", None)
+                if view is not None:
+                    return view
+        except Exception:
+            pass
+        return None
+
+    def _segment_base_for_addr(self, view, addr):
+        try:
+            segment = view.get_segment_at(addr)
+            if segment is not None and segment.start <= addr < segment.end:
+                return builtins.int(segment.start)
+        except Exception:
+            pass
+
+        try:
+            containing = [s for s in view.segments if s.start <= addr < s.end]
+            if containing:
+                # Prefer the most specific overlap; ties go to the highest base.
+                containing.sort(
+                    key=lambda s: (
+                        builtins.int(s.end) - builtins.int(s.start),
+                        -builtins.int(s.start),
+                    )
+                )
+                return builtins.int(containing[0].start)
+        except Exception:
+            pass
+
+        return builtins.int(addr) & ~0xffff
+
+    def _read_u16(self, view, addr):
+        try:
+            raw = view.read(builtins.int(addr), 2)
+            if raw is None:
+                return None
+            raw = bytes(raw)
+            if len(raw) < 2:
+                return None
+            return builtins.int.from_bytes(raw[:2], "little")
+        except Exception:
+            return None
+
+    def _const_addr(self, il, addr):
+        try:
+            return il.const_pointer(3, addr)
+        except Exception:
+            return il.const(3, addr)
+
+    def _ret_pass_flags_enabled(self, il):
+        try:
+            return bool(getattr(il.arch, "ret_pass_flags", False))
+        except Exception:
+            return False
+
+    def _ret_status_flags(self, il):
+        try:
+            arch_flags = getattr(il.arch, "ret_status_flags", None)
+            if isinstance(arch_flags, (tuple, list)):
+                return tuple(flag for flag in arch_flags if isinstance(flag, builtins.str))
+        except Exception:
+            pass
+        return self._default_ret_status_flags
+
+    def _ret_shadow_register_for_flag(self, il, flag):
+        try:
+            reg_map = getattr(il.arch, "ret_flag_shadow_regs", None)
+            if not isinstance(reg_map, dict):
+                reg_map = self._default_ret_flag_shadow_regs
+            reg = reg_map.get(flag)
+            if not isinstance(reg, builtins.str):
+                return None
+            regs = getattr(il.arch, "regs", None)
+            if isinstance(regs, dict) and reg not in regs:
+                return None
+            return reg
+        except Exception:
+            return None
+
+    def _lift_shadow_status_flags(self, il):
+        if not self._ret_pass_flags_enabled(il):
+            return
+
+        arch_flags = getattr(il.arch, "flags", ())
+        for flag in self._ret_status_flags(il):
+            if flag not in arch_flags:
+                continue
+            shadow_reg = self._ret_shadow_register_for_flag(il, flag)
+            if shadow_reg is None:
+                continue
+            il.append(il.set_reg(1, shadow_reg, il.flag(flag)))
+
+    def _lift_restore_status_flags(self, il):
+        if not self._ret_pass_flags_enabled(il):
+            return
+
+        arch_flags = getattr(il.arch, "flags", ())
+        for flag in self._ret_status_flags(il):
+            if flag not in arch_flags:
+                continue
+            shadow_reg = self._ret_shadow_register_for_flag(il, flag)
+            if shadow_reg is None:
+                continue
+            il.append(il.set_flag(flag, il.reg(1, shadow_reg)))
 
     def _lift_load_far(self, il, addr):
         seg_off = LLIL_TEMP(il.temp_reg_count)
