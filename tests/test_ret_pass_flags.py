@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 from binaryninja import lowlevelil
+from binaryninja.enums import LowLevelILFlagCondition
 from binja_test_mocks.mock_llil import MockFlag, MockLabel, MockLLIL, mllil, mreg
 
 from binja_i8086.architecture import Intel8086
 
 
-STATUS_FLAGS = ("c", "z")
+STATUS_FLAGS = ("c", "p", "a", "z", "s", "o")
 SHADOW_REGS = {
     "c": "rc",
+    "p": "rp",
+    "a": "ra",
     "z": "rz",
+    "s": "rs",
+    "o": "ro",
 }
 
 
@@ -18,6 +23,18 @@ def _lift_to_llil(arch: Intel8086, data: bytes, addr: int = 0x1000) -> list[Mock
     il.current_address = addr  # type: ignore[attr-defined]
     length = arch.get_instruction_low_level_il(data, addr, il)
     assert length is not None and length > 0
+    return [node for node in il if not isinstance(node, MockLabel)]
+
+
+def _lift_block_to_llil(arch: Intel8086, data: bytes, addr: int = 0x1000) -> list[MockLLIL]:
+    il = lowlevelil.LowLevelILFunction(arch)
+    offset = 0
+    while offset < len(data):
+        cur_addr = addr + offset
+        il.current_address = cur_addr  # type: ignore[attr-defined]
+        length = arch.get_instruction_low_level_il(data[offset:], cur_addr, il)
+        assert length is not None and length > 0
+        offset += length
     return [node for node in il if not isinstance(node, MockLabel)]
 
 
@@ -100,3 +117,19 @@ def test_ret_pass_flags_fallback_for_x86_16_core_style_arch() -> None:
         *_expected_flag_shadows(),
         mllil("RET", [mllil("POP.w", [])]),
     ]
+
+
+def test_signed_branch_after_call_uses_restored_signed_flags() -> None:
+    arch = Intel8086()
+    # call +0; jg +0
+    call_then_jg = b"\xE8\x00\x00\x7F\x00"
+    llil = _lift_block_to_llil(arch, call_then_jg)
+
+    assert llil[0] == mllil("CALL", [mllil("CONST.l", [0x1003])])
+    assert llil[1 : 1 + len(STATUS_FLAGS)] == _expected_flag_restores()
+    # jg maps to signed-greater-than and requires z/s/o to be available.
+    if_node = llil[1 + len(STATUS_FLAGS)]
+    assert if_node.op == "IF"
+    cond = if_node.ops[0]
+    assert cond.op == "FLAG_COND"
+    assert cond.ops[0] == LowLevelILFlagCondition.LLFC_SGT
