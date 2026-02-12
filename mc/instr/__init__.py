@@ -17,10 +17,14 @@ a20_gate = True
 
 class Instruction(object):
     opcodes = {}
-    _default_ret_status_flags = ("c", "z")
+    _default_ret_status_flags = ("c", "p", "a", "z", "s", "o")
     _default_ret_flag_shadow_regs = {
         "c": "rc",
+        "p": "rp",
+        "a": "ra",
         "z": "rz",
+        "s": "rs",
+        "o": "ro",
     }
     _ret_pass_flag_arch_names = {"8086", "x86_16"}
 
