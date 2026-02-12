@@ -38,4 +38,7 @@ class Lock(Prefix):
         return tokens
 
     def lift(self, il, addr):
-        il.append(il.unimplemented())
+        # 8086 LOCK is a prefix that modifies bus semantics for the following
+        # instruction; BN LLIL has no explicit lock primitive, so we lift the
+        # wrapped instruction directly.
+        self.next.lift(il, addr + 1)
