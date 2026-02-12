@@ -86,3 +86,13 @@ def test_call_near_rm_without_view_remains_indirect() -> None:
     target_expr = _lift_call_expr(data, addr, view=None)
 
     assert target_expr.op != "CONST_PTR.l"
+
+
+def test_call_near_rm_cs_table_zero_entry_stays_indirect() -> None:
+    data = bytes.fromhex("ff160860")
+    addr = 0x1A338
+    view = FakeView({0x16008: 0x00, 0x16009: 0x00})
+
+    target_expr = _lift_call_expr(data, addr, view)
+
+    assert target_expr.op != "CONST_PTR.l"
