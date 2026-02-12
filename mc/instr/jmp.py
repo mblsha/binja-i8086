@@ -123,7 +123,32 @@ class JmpNearRM(InstrHasModRegRM, Instr16Bit, Jmp):
         tokens += self._render_reg_mem()
         return tokens
 
+    def _try_resolve_cs_jump_table_target(self, il, addr):
+        if self._mod_bits() == 0b11:
+            return None
+        if not (self._mod_bits() == 0b00 and self._reg_mem_bits() == 0b110):
+            return None
+        if self.segment() != "cs":
+            return None
+
+        view = self._view_from_il(il)
+        if view is None:
+            return None
+
+        segment_base = self._segment_base_for_addr(view, addr)
+        slot_addr = (segment_base + (self.disp & 0xffff)) & 0xfffff
+        target_off = self._read_u16(view, slot_addr)
+        if target_off is None:
+            return None
+        if target_off == 0:
+            return None
+        return (segment_base + target_off) & 0xfffff
+
     def lift(self, il, addr):
+        resolved = self._try_resolve_cs_jump_table_target(il, addr)
+        if resolved is not None:
+            il.append(il.jump(self._const_addr(il, resolved)))
+            return
         il.append(il.jump(self._lift_phys_addr(il, self.segment(), self._lift_reg_mem(il))))
 
 
@@ -181,6 +206,11 @@ class JmpCond(JmpShort):
 
     def lift(self, il, addr):
         untaken_label = il.get_label_for_address(il.arch, addr + self.length())
+        if untaken_label is None:
+            mark_untaken = True
+            untaken_label = LowLevelILLabel()
+        else:
+            mark_untaken = False
         taken_label   = il.get_label_for_address(il.arch, self.ip)
         if taken_label is None:
             mark_taken = True
@@ -200,6 +230,8 @@ class JmpCond(JmpShort):
         if mark_taken:
             il.mark_label(taken_label)
             il.append(il.jump(il.const(3, self.ip)))
+        if mark_untaken:
+            il.mark_label(untaken_label)
 
 
 class Loop(JmpCond):
@@ -215,6 +247,11 @@ class Loop(JmpCond):
 
     def lift(self, il, addr):
         untaken_label = il.get_label_for_address(il.arch, addr + self.length())
+        if untaken_label is None:
+            mark_untaken = True
+            untaken_label = LowLevelILLabel()
+        else:
+            mark_untaken = False
         taken_label   = il.get_label_for_address(il.arch, self.ip)
         if taken_label is None:
             mark_taken = True
@@ -226,6 +263,8 @@ class Loop(JmpCond):
         if mark_taken:
             il.mark_label(taken_label)
             il.append(il.jump(il.const(3, self.ip)))
+        if mark_untaken:
+            il.mark_label(untaken_label)
 
 
 class Loope(Loop):
