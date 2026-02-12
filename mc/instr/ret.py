@@ -36,6 +36,7 @@ class RetImm(InstrHasImm, Ret):
 
 class RetFar(Ret):
     def lift(self, il, addr):
+        self._lift_shadow_status_flags(il)
         ip = LLIL_TEMP(il.temp_reg_count)
         il.append(il.set_reg(2, ip, il.pop(2)))
         cs = LLIL_TEMP(il.temp_reg_count)
@@ -45,6 +46,7 @@ class RetFar(Ret):
 
 class RetFarImm(RetImm):
     def lift(self, il, addr):
+        self._lift_shadow_status_flags(il)
         ip = LLIL_TEMP(il.temp_reg_count)
         il.append(il.set_reg(2, ip, il.pop(2)))
         cs = LLIL_TEMP(il.temp_reg_count)
@@ -69,12 +71,14 @@ class Iret(Ret):
 
 class RetNear(Ret):
     def lift(self, il, addr):
+        self._lift_shadow_status_flags(il)
         ip = il.pop(2)
         il.append(il.ret(ip))
 
 
 class RetNearImm(RetImm):
     def lift(self, il, addr):
+        self._lift_shadow_status_flags(il)
         ip = il.pop(2)
         il.append(il.set_reg(2, 'sp', il.add(2, il.reg(2, 'sp'), il.const(2, self.imm))))
         il.append(il.ret(ip))
