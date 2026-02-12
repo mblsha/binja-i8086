@@ -11,6 +11,20 @@ except ImportError:
 
 __all__ = ['Intel8086']
 
+RET_PASS_FLAGS_BY_ARCH = {
+    "8086": True,
+}
+
+RET_STATUS_FLAGS = ("c", "p", "a", "z", "s", "o")
+RET_FLAG_SHADOW_REGS = {
+    "c": "rc",
+    "p": "rp",
+    "a": "ra",
+    "z": "rz",
+    "s": "rs",
+    "o": "ro",
+}
+
 
 class Intel8086(Architecture):
     name = "8086"
@@ -44,7 +58,14 @@ class Intel8086(Architecture):
         'es': RegisterInfo('es', 2),
         'ss': RegisterInfo('ss', 2),
         # Instruction pointer
-        'ip': RegisterInfo('ip', 2)
+        'ip': RegisterInfo('ip', 2),
+        # Shadow registers used to pass status flags through call/ret edges.
+        'rc': RegisterInfo('rc', 1),
+        'rp': RegisterInfo('rp', 1),
+        'ra': RegisterInfo('ra', 1),
+        'rz': RegisterInfo('rz', 1),
+        'rs': RegisterInfo('rs', 1),
+        'ro': RegisterInfo('ro', 1),
     }
     flags = [
         # Status
@@ -104,6 +125,14 @@ class Intel8086(Architecture):
         'inb': IntrinsicInfo([Type.int(1)], [Type.int(2)]),
         'inw': IntrinsicInfo([Type.int(2)], [Type.int(2)]),
     }
+
+    ret_status_flags = RET_STATUS_FLAGS
+    ret_flag_shadow_regs = RET_FLAG_SHADOW_REGS
+    ret_pass_flags = False
+
+    def __init__(self):
+        super().__init__()
+        self.ret_pass_flags = RET_PASS_FLAGS_BY_ARCH.get(self.name, False)
 
     def get_instruction_info(self, data, addr):
         decoded = mc.decode(data, addr)

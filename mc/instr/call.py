@@ -55,6 +55,7 @@ class CallFarImm(Call):
         il.append(il.set_reg(2, 'cs', il.const(2, self.cs)))
         il.append(il.call_stack_adjust(il.const(3, self.target()), 2))
         il.append(il.set_reg(2, 'cs', il.reg(2, temp)))
+        self._lift_restore_status_flags(il)
 
 
 class CallFarMem(InstrHasModRegRM, Instr16Bit, Call):
@@ -87,6 +88,7 @@ class CallFarMem(InstrHasModRegRM, Instr16Bit, Call):
         il.append(il.push(2, il.reg(2, 'cs')))
         il.append(il.call_stack_adjust(self._lift_phys_addr(il, cs, ip), 2))
         il.append(il.set_reg(2, 'cs', il.reg(2, old_cs)))
+        self._lift_restore_status_flags(il)
 
 
 class CallNearImm(Call):
@@ -115,6 +117,7 @@ class CallNearImm(Call):
 
     def lift(self, il, addr):
         il.append(il.call(il.const(3, self.ip)))
+        self._lift_restore_status_flags(il)
 
 
 class CallNearRM(InstrHasModRegRM, Instr16Bit, Call):
@@ -123,13 +126,38 @@ class CallNearRM(InstrHasModRegRM, Instr16Bit, Call):
 
     def analyze(self, info, addr):
         Call.analyze(self, info, addr)
-        # FIXME: what should we do for indirect calls?
-        # info.add_branch(BranchType.CallDestination)
+        info.add_branch(BranchType.IndirectBranch)
 
     def render(self, addr):
         tokens = Call.render(self, addr)
         tokens += self._render_reg_mem()
         return tokens
 
+    def _try_resolve_cs_call_table_target(self, il, addr):
+        if self._mod_bits() == 0b11:
+            return None
+        if not (self._mod_bits() == 0b00 and self._reg_mem_bits() == 0b110):
+            return None
+        if getattr(self, "segment_override", None) != "cs":
+            return None
+
+        view = self._view_from_il(il)
+        if view is None:
+            return None
+
+        segment_base = self._segment_base_for_addr(view, addr)
+        slot_addr = (segment_base + (self.disp & 0xffff)) & 0xfffff
+        target_off = self._read_u16(view, slot_addr)
+        if target_off is None:
+            return None
+        return (segment_base + target_off) & 0xfffff
+
     def lift(self, il, addr):
+        resolved = self._try_resolve_cs_call_table_target(il, addr)
+        if resolved is not None:
+            il.append(il.call(self._const_addr(il, resolved)))
+            self._lift_restore_status_flags(il)
+            return
+
         il.append(il.call(self._lift_phys_addr(il, self.segment(), self._lift_reg_mem(il))))
+        self._lift_restore_status_flags(il)
