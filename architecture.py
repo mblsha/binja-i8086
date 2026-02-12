@@ -1,5 +1,5 @@
 from binaryninja import Architecture, RegisterInfo, IntrinsicInfo, InstructionInfo
-from binaryninja.enums import Endianness, FlagRole, LowLevelILFlagCondition
+from binaryninja.enums import Endianness, FlagRole, LowLevelILFlagCondition, LowLevelILOperation
 from binaryninja.types import Type
 from binaryninja.log import log_error
 
@@ -133,6 +133,93 @@ class Intel8086(Architecture):
     def __init__(self):
         super().__init__()
         self.ret_pass_flags = RET_PASS_FLAGS_BY_ARCH.get(self.name, False)
+
+    def _flag_expr_width(self, size):
+        if isinstance(size, int) and size > 0:
+            return size
+        return 1
+
+    def _calc_flag_result_expr(self, op, size, operands, il):
+        w = self._flag_expr_width(size)
+        if not isinstance(operands, (tuple, list)):
+            return None
+        if op in (LowLevelILOperation.LLIL_SET_REG, LowLevelILOperation.LLIL_STORE):
+            if len(operands) >= 2:
+                return operands[1]
+            return None
+        if len(operands) < 2:
+            return None
+        lhs = operands[0]
+        rhs = operands[1]
+        if op == LowLevelILOperation.LLIL_ADD:
+            return il.add(w, lhs, rhs)
+        if op == LowLevelILOperation.LLIL_SUB:
+            return il.sub(w, lhs, rhs)
+        if op == LowLevelILOperation.LLIL_ADC and len(operands) >= 3:
+            return il.add_carry(w, lhs, rhs, operands[2])
+        if op == LowLevelILOperation.LLIL_SBB and len(operands) >= 3:
+            return il.sub_borrow(w, lhs, rhs, operands[2])
+        if op == LowLevelILOperation.LLIL_AND:
+            return il.and_expr(w, lhs, rhs)
+        if op == LowLevelILOperation.LLIL_OR:
+            return il.or_expr(w, lhs, rhs)
+        if op == LowLevelILOperation.LLIL_XOR:
+            return il.xor_expr(w, lhs, rhs)
+        return None
+
+    def _calc_parity_flag_expr(self, op, size, operands, il):
+        result = self._calc_flag_result_expr(op, size, operands, il)
+        if result is None:
+            return None
+        low8 = il.low_part(1, result)
+        parity_xor = il.const(1, 0)
+        for bit in range(8):
+            bit_expr = il.test_bit(1, low8, il.const(1, bit))
+            parity_xor = il.xor_expr(1, parity_xor, bit_expr)
+        # PF=1 for even parity of low 8 bits.
+        return il.compare_equal(1, parity_xor, il.const(1, 0))
+
+    def _calc_aux_carry_flag_expr(self, op, size, operands, il):
+        w = self._flag_expr_width(size)
+        if not isinstance(operands, (tuple, list)) or len(operands) < 2:
+            return None
+        lhs = operands[0]
+        rhs = operands[1]
+
+        if op in (LowLevelILOperation.LLIL_AND, LowLevelILOperation.LLIL_OR, LowLevelILOperation.LLIL_XOR):
+            # AF is undefined for logical ops on x86; use a stable 0 to avoid
+            # polluting MLIL/HLIL with "unimplemented" pseudo-ops.
+            return il.const(1, 0)
+
+        if op == LowLevelILOperation.LLIL_ADD:
+            result = il.add(w, lhs, rhs)
+        elif op == LowLevelILOperation.LLIL_SUB:
+            result = il.sub(w, lhs, rhs)
+        elif op == LowLevelILOperation.LLIL_ADC and len(operands) >= 3:
+            result = il.add_carry(w, lhs, rhs, operands[2])
+        elif op == LowLevelILOperation.LLIL_SBB and len(operands) >= 3:
+            result = il.sub_borrow(w, lhs, rhs, operands[2])
+        else:
+            return None
+
+        # AF is bit4 carry/borrow. Works for both add/sub families.
+        nibble = il.and_expr(
+            w,
+            il.xor_expr(w, il.xor_expr(w, lhs, rhs), result),
+            il.const(w, 0x10),
+        )
+        return il.compare_not_equal(w, nibble, il.const(w, 0))
+
+    def get_flag_write_low_level_il(self, op, size, write_type, flag, operands, il):
+        if flag == "p":
+            parity = self._calc_parity_flag_expr(op, size, operands, il)
+            if parity is not None:
+                return parity
+        if flag == "a":
+            aux = self._calc_aux_carry_flag_expr(op, size, operands, il)
+            if aux is not None:
+                return aux
+        return Architecture.get_flag_write_low_level_il(self, op, size, write_type, flag, operands, il)
 
     def get_instruction_info(self, data, addr):
         decoded = mc.decode(data, addr)
