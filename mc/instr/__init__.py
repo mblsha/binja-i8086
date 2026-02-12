@@ -77,6 +77,13 @@ class Instruction(object):
 
     def _view_from_il(self, il):
         try:
+            view = getattr(il, "view", None)
+            if view is not None:
+                return view
+        except Exception:
+            pass
+
+        try:
             source_function = getattr(il, "source_function", None)
             if source_function is not None:
                 view = getattr(source_function, "view", None)
@@ -84,20 +91,24 @@ class Instruction(object):
                     return view
         except Exception:
             pass
+
         return None
 
     def _segment_base_for_addr(self, view, addr):
-        try:
-            segment = view.get_segment_at(addr)
-            if segment is not None and segment.start <= addr < segment.end:
-                return builtins.int(segment.start)
-        except Exception:
-            pass
+        addr = builtins.int(addr)
+        page_base = addr & ~0xffff
 
         try:
             containing = [s for s in view.segments if s.start <= addr < s.end]
             if containing:
-                # Prefer the most specific overlap; ties go to the highest base.
+                # For segmented x86 tables (e.g. cs:[0x3004]) prefer the 64K page base
+                # whenever that page is actually mapped, even if analysis added a
+                # narrower overlapping overlay segment.
+                if any(s.start <= page_base < s.end for s in containing):
+                    return page_base
+
+                # Otherwise keep the old overlap preference: most specific region,
+                # ties go to the highest base.
                 containing.sort(
                     key=lambda s: (
                         builtins.int(s.end) - builtins.int(s.start),
@@ -108,7 +119,14 @@ class Instruction(object):
         except Exception:
             pass
 
-        return builtins.int(addr) & ~0xffff
+        try:
+            segment = view.get_segment_at(addr)
+            if segment is not None and segment.start <= addr < segment.end:
+                return builtins.int(segment.start)
+        except Exception:
+            pass
+
+        return page_base
 
     def _read_u16(self, view, addr):
         try:

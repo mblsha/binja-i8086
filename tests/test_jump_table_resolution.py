@@ -61,3 +61,18 @@ def test_jmp_near_rm_cs_table_zero_entry_stays_indirect() -> None:
     target_expr = _lift_jump_expr(data, addr, view)
 
     assert target_expr.op != "CONST_PTR.l"
+
+def test_jmp_near_rm_cs_table_prefers_page_base_over_overlay_segment() -> None:
+    # FF 26 04 30 => jmp word [0x3004], default segment is CS.
+    data = bytes.fromhex("ff260430")
+    addr = 0x1A51E
+    view = FakeView(
+        {0x13004: 0x29, 0x13005: 0x3F},
+        segments=[FakeSegment(0x16000, 0x1B000), FakeSegment(0x0, 0x50000)],
+    )
+
+    target_expr = _lift_jump_expr(data, addr, view)
+
+    assert target_expr.op == "CONST_PTR.l"
+    assert target_expr.ops == [0x13F29]
+

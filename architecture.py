@@ -1,4 +1,9 @@
 from binaryninja import Architecture, RegisterInfo, IntrinsicInfo, InstructionInfo
+
+try:
+    from binaryninja import ArchitectureHook
+except Exception:
+    ArchitectureHook = None
 from binaryninja.enums import Endianness, FlagRole, LowLevelILFlagCondition, LowLevelILOperation
 from binaryninja.types import Type
 from binaryninja.log import log_error
@@ -139,26 +144,83 @@ class Intel8086(Architecture):
             return size
         return 1
 
+    def _coerce_reg_operand(self, il, size, operand):
+        candidates = []
+        seen = set()
+
+        def push(value):
+            key = id(value)
+            if key in seen:
+                return
+            seen.add(key)
+            candidates.append(value)
+
+        push(operand)
+        for attr in ("name", "reg", "register", "index"):
+            try:
+                value = getattr(operand, attr, None)
+            except Exception:
+                value = None
+            if value is not None:
+                push(value)
+
+        while candidates:
+            candidate = candidates.pop(0)
+            if candidate is None:
+                continue
+            if isinstance(candidate, str):
+                try:
+                    return il.reg(size, candidate)
+                except Exception:
+                    continue
+            if isinstance(candidate, int):
+                try:
+                    return il.reg(size, candidate)
+                except Exception:
+                    continue
+            for attr in ("name", "reg", "register", "index"):
+                try:
+                    nested = getattr(candidate, attr, None)
+                except Exception:
+                    nested = None
+                if nested is not None:
+                    push(nested)
+        return None
+
+    def _normalize_flag_operand(self, il, size, operand):
+        # Some callback paths pass raw ILRegister operands; arithmetic builders
+        # require expression operands, so convert register descriptors to `reg`.
+        try:
+            if type(operand).__name__ == "ILRegister":
+                reg_expr = self._coerce_reg_operand(il, size, operand)
+                if reg_expr is not None:
+                    return reg_expr
+        except Exception:
+            pass
+        return operand
+
     def _calc_flag_result_expr(self, op, size, operands, il):
         w = self._flag_expr_width(size)
         if not isinstance(operands, (tuple, list)):
             return None
         if op in (LowLevelILOperation.LLIL_SET_REG, LowLevelILOperation.LLIL_STORE):
             if len(operands) >= 2:
-                return operands[1]
+                return self._normalize_flag_operand(il, w, operands[1])
             return None
         if len(operands) < 2:
             return None
-        lhs = operands[0]
-        rhs = operands[1]
+        lhs = self._normalize_flag_operand(il, w, operands[0])
+        rhs = self._normalize_flag_operand(il, w, operands[1])
         if op == LowLevelILOperation.LLIL_ADD:
             return il.add(w, lhs, rhs)
         if op == LowLevelILOperation.LLIL_SUB:
             return il.sub(w, lhs, rhs)
         if op == LowLevelILOperation.LLIL_ADC and len(operands) >= 3:
-            return il.add_carry(w, lhs, rhs, operands[2])
+            carry = self._normalize_flag_operand(il, 1, operands[2])
+            return il.add_carry(w, lhs, rhs, carry)
         if op == LowLevelILOperation.LLIL_SBB and len(operands) >= 3:
-            return il.sub_borrow(w, lhs, rhs, operands[2])
+            borrow = self._normalize_flag_operand(il, 1, operands[2])
+            return il.sub_borrow(w, lhs, rhs, borrow)
         if op == LowLevelILOperation.LLIL_AND:
             return il.and_expr(w, lhs, rhs)
         if op == LowLevelILOperation.LLIL_OR:
@@ -183,8 +245,8 @@ class Intel8086(Architecture):
         w = self._flag_expr_width(size)
         if not isinstance(operands, (tuple, list)) or len(operands) < 2:
             return None
-        lhs = operands[0]
-        rhs = operands[1]
+        lhs = self._normalize_flag_operand(il, w, operands[0])
+        rhs = self._normalize_flag_operand(il, w, operands[1])
 
         if op in (LowLevelILOperation.LLIL_AND, LowLevelILOperation.LLIL_OR, LowLevelILOperation.LLIL_XOR):
             # AF is undefined for logical ops on x86; use a stable 0 to avoid
@@ -196,9 +258,11 @@ class Intel8086(Architecture):
         elif op == LowLevelILOperation.LLIL_SUB:
             result = il.sub(w, lhs, rhs)
         elif op == LowLevelILOperation.LLIL_ADC and len(operands) >= 3:
-            result = il.add_carry(w, lhs, rhs, operands[2])
+            carry = self._normalize_flag_operand(il, 1, operands[2])
+            result = il.add_carry(w, lhs, rhs, carry)
         elif op == LowLevelILOperation.LLIL_SBB and len(operands) >= 3:
-            result = il.sub_borrow(w, lhs, rhs, operands[2])
+            borrow = self._normalize_flag_operand(il, 1, operands[2])
+            result = il.sub_borrow(w, lhs, rhs, borrow)
         else:
             return None
 
@@ -211,15 +275,24 @@ class Intel8086(Architecture):
         return il.compare_not_equal(w, nibble, il.const(w, 0))
 
     def get_flag_write_low_level_il(self, op, size, write_type, flag, operands, il):
-        if flag == "p":
-            parity = self._calc_parity_flag_expr(op, size, operands, il)
-            if parity is not None:
-                return parity
-        if flag == "a":
-            aux = self._calc_aux_carry_flag_expr(op, size, operands, il)
-            if aux is not None:
-                return aux
-        return Architecture.get_flag_write_low_level_il(self, op, size, write_type, flag, operands, il)
+        try:
+            if flag == "p":
+                parity = self._calc_parity_flag_expr(op, size, operands, il)
+                if parity is not None:
+                    return parity
+            if flag == "a":
+                aux = self._calc_aux_carry_flag_expr(op, size, operands, il)
+                if aux is not None:
+                    return aux
+        except Exception:
+            # Never let custom flag lowering break BN analysis.
+            pass
+        try:
+            return Architecture.get_flag_write_low_level_il(self, op, size, write_type, flag, operands, il)
+        except Exception:
+            # Last-resort fallback to avoid aborting analysis on unexpected core API
+            # operand shapes.
+            return il.undefined()
 
     def get_instruction_info(self, data, addr):
         decoded = mc.decode(data, addr)
@@ -271,3 +344,69 @@ class Intel8086(Architecture):
         return mc.encode(branch, addr)
 
 Intel8086.register()
+
+
+if ArchitectureHook is not None:
+
+    class X86_16CallTableHook(ArchitectureHook):
+        """Lift x86_16 call/jmp cs:[disp16] table entries through i8086 helpers."""
+
+        def __init__(self, base_arch):
+            super().__init__(base_arch)
+
+        @staticmethod
+        def _should_use_custom_lift(decoded):
+            if decoded is None:
+                return False
+
+            try:
+                if isinstance(decoded, (mc.instr.call.CallNearRM, mc.instr.jmp.JmpNearRM)):
+                    return True
+
+                if isinstance(decoded, mc.instr.seg.Segment):
+                    nxt = getattr(decoded, "next", None)
+                    if isinstance(nxt, (mc.instr.call.CallNearRM, mc.instr.jmp.JmpNearRM)):
+                        return True
+            except Exception:
+                return False
+
+            return False
+
+        @staticmethod
+        def _attach_view_if_missing(il):
+            try:
+                if getattr(il, "view", None) is not None:
+                    return
+            except Exception:
+                return
+
+            try:
+                source_function = getattr(il, "source_function", None)
+                if source_function is not None:
+                    view = getattr(source_function, "view", None)
+                    if view is not None:
+                        il.view = view
+            except Exception:
+                pass
+
+        def get_instruction_low_level_il(self, data, addr, il):
+            decoded = mc.decode(data, addr)
+            if self._should_use_custom_lift(decoded):
+                try:
+                    self._attach_view_if_missing(il)
+                    decoded.lift(il, addr)
+                    return decoded.total_length()
+                except Exception:
+                    # Fall back to core lifting for safety.
+                    pass
+
+            return super().get_instruction_low_level_il(data, addr, il)
+
+
+_x86_16_call_table_hook = None
+if ArchitectureHook is not None:
+    try:
+        _x86_16_call_table_hook = X86_16CallTableHook(Architecture["x86_16"])
+        _x86_16_call_table_hook.register()
+    except Exception:
+        _x86_16_call_table_hook = None
