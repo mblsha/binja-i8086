@@ -138,7 +138,7 @@ class CallNearRM(InstrHasModRegRM, Instr16Bit, Call):
             return None
         if not (self._mod_bits() == 0b00 and self._reg_mem_bits() == 0b110):
             return None
-        if getattr(self, "segment_override", None) != "cs":
+        if self.segment() != "cs":
             return None
 
         view = self._view_from_il(il)
