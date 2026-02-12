@@ -15,14 +15,10 @@ RET_PASS_FLAGS_BY_ARCH = {
     "8086": True,
 }
 
-RET_STATUS_FLAGS = ("c", "p", "a", "z", "s", "o")
+RET_STATUS_FLAGS = ("c", "z")
 RET_FLAG_SHADOW_REGS = {
     "c": "rc",
-    "p": "rp",
-    "a": "ra",
     "z": "rz",
-    "s": "rs",
-    "o": "ro",
 }
 
 
