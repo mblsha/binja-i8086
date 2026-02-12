@@ -6,14 +6,10 @@ from binja_test_mocks.mock_llil import MockFlag, MockLabel, MockLLIL, mllil, mre
 from binja_i8086.architecture import Intel8086
 
 
-STATUS_FLAGS = ("c", "p", "a", "z", "s", "o")
+STATUS_FLAGS = ("c", "z")
 SHADOW_REGS = {
     "c": "rc",
-    "p": "rp",
-    "a": "ra",
     "z": "rz",
-    "s": "rs",
-    "o": "ro",
 }
 
 
