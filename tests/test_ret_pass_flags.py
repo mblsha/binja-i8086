@@ -85,3 +85,22 @@ def test_ret_pass_flags_can_be_disabled_per_arch_instance() -> None:
 
     ret_llil = _lift_to_llil(arch, b"\xC3")
     assert ret_llil == [mllil("RET", [mllil("POP.w", [])])]
+
+
+def test_ret_pass_flags_fallback_for_x86_16_core_style_arch() -> None:
+    arch = Intel8086()
+    arch.name = "x86_16"
+    # Simulate a CoreArchitecture-like object where plugin attrs are absent.
+    arch.__dict__.pop("ret_pass_flags", None)
+
+    call_llil = _lift_to_llil(arch, b"\xE8\x00\x00")
+    assert call_llil == [
+        mllil("CALL", [mllil("CONST.l", [0x1003])]),
+        *_expected_flag_restores(),
+    ]
+
+    ret_llil = _lift_to_llil(arch, b"\xC3")
+    assert ret_llil == [
+        *_expected_flag_shadows(),
+        mllil("RET", [mllil("POP.w", [])]),
+    ]
