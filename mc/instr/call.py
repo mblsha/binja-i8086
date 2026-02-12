@@ -150,6 +150,10 @@ class CallNearRM(InstrHasModRegRM, Instr16Bit, Call):
         target_off = self._read_u16(view, slot_addr)
         if target_off is None:
             return None
+        # Zero call-table entries are frequently runtime-patched placeholders.
+        # Keep these indirect so HLIL does not mis-resolve to segment base.
+        if target_off == 0:
+            return None
         return (segment_base + target_off) & 0xfffff
 
     def lift(self, il, addr):
