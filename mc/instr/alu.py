@@ -13,21 +13,36 @@ class AluLogic(InstrHasWidth, Instruction):
     def name(self):
         return instr_alu_logic[(self.opcode & 0b111000) >> 3]
 
+    def _is_logic_op(self):
+        return self.name() in ('or', 'and', 'xor')
+
+    def _logic_flag_write(self):
+        # Logical ops define PF/AF/ZF/SF from the result while CF/OF are
+        # deterministically cleared.
+        return '!c' if self._is_logic_op() else '*'
+
+    def _append_logic_flag_fixups(self, il):
+        if not self._is_logic_op():
+            return
+        # x86 logical ops clear carry/overflow deterministically.
+        il.append(il.set_flag('c', il.const(1, 0)))
+        il.append(il.set_flag('o', il.const(1, 0)))
+
     def _op(self, il, lhs, rhs):
         if self.name() == 'add':
             result = il.add(self.width(), lhs, rhs, '*')
         elif self.name() == 'or':
-            result = il.or_expr(self.width(), lhs, rhs, '*')
+            result = il.or_expr(self.width(), lhs, rhs, self._logic_flag_write())
         elif self.name() == 'adc':
             result = il.add_carry(self.width(), lhs, rhs, il.flag('c'), '*')
         elif self.name() == 'sbb':
             result = il.sub_borrow(self.width(), lhs, rhs, il.flag('c'), '*')
         elif self.name() == 'and':
-            result = il.and_expr(self.width(), lhs, rhs, '*')
+            result = il.and_expr(self.width(), lhs, rhs, self._logic_flag_write())
         elif self.name() == 'sub':
             result = il.sub(self.width(), lhs, rhs, '*')
         elif self.name() == 'xor':
-            result = il.xor_expr(self.width(), lhs, rhs, '*')
+            result = il.xor_expr(self.width(), lhs, rhs, self._logic_flag_write())
         elif self.name() == 'cmp':
             il.append(il.sub(self.width(), lhs, rhs, '*'))
             return
@@ -50,8 +65,9 @@ class AluLogicRMReg(InstrHasModRegRM, AluLogic):
     def lift(self, il, addr):
         w = self.width()
         result = self._op(il, self._lift_reg_mem(il), il.reg(w, self.src_reg()))
-        if result:
+        if result is not None:
             il.append(self._lift_reg_mem(il, store=result))
+            self._append_logic_flag_fixups(il)
 
 
 class AluLogicRegRM(InstrHasModRegRM, AluLogic):
@@ -70,8 +86,9 @@ class AluLogicRegRM(InstrHasModRegRM, AluLogic):
     def lift(self, il, addr):
         w = self.width()
         result = self._op(il, il.reg(w, self.dst_reg()), self._lift_reg_mem(il))
-        if result:
+        if result is not None:
             il.append(il.set_reg(w, self.dst_reg(), result))
+            self._append_logic_flag_fixups(il)
 
 
 class AluLogicAccImm(InstrHasImm, AluLogic):
@@ -90,8 +107,9 @@ class AluLogicAccImm(InstrHasImm, AluLogic):
     def lift(self, il, addr):
         w = self.width()
         result = self._op(il, il.reg(w, self.dst_reg()), il.const(w, self.imm))
-        if result:
+        if result is not None:
             il.append(il.set_reg(w, self.dst_reg(), result))
+            self._append_logic_flag_fixups(il)
 
 
 class AluLogicRMImm(InstrHasModRegRM, AluLogic):
@@ -142,8 +160,9 @@ class AluLogicRMImm(InstrHasModRegRM, AluLogic):
         if self._sign_extend():
             rhs = il.sign_extend(w, rhs)
         result = self._op(il, lhs, rhs)
-        if result:
+        if result is not None:
             il.append(self._lift_reg_mem(il, store=result))
+            self._append_logic_flag_fixups(il)
 
 
 class AluShiftRM(InstrHasModRegRM, InstrHasWidth, Instruction):
