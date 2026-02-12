@@ -53,6 +53,18 @@ def test_call_near_rm_cs_table_resolves_to_const_pointer_with_fallback_base() ->
     assert target_expr.ops == [0x191E5]
 
 
+def test_call_near_rm_default_cs_table_resolves_without_segment_prefix() -> None:
+    # FF 16 08 60 => call word [0x6008], default segment is CS for this opcode.
+    data = bytes.fromhex("ff160860")
+    addr = 0x1A338
+    view = FakeView({0x16008: 0xE5, 0x16009: 0x91})
+
+    target_expr = _lift_call_expr(data, addr, view)
+
+    assert target_expr.op == "CONST_PTR.l"
+    assert target_expr.ops == [0x191E5]
+
+
 def test_call_near_rm_cs_table_uses_view_segment_base() -> None:
     data = bytes.fromhex("2eff160860")
     addr = 0x1A338

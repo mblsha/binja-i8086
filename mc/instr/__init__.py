@@ -26,6 +26,7 @@ class Instruction(object):
         "s": "rs",
         "o": "ro",
     }
+    _ret_pass_flag_arch_names = {"8086", "x86_16"}
 
     def __new__(cls, decoder=None):
         if decoder is None:
@@ -128,10 +129,34 @@ class Instruction(object):
             return il.const(3, addr)
 
     def _ret_pass_flags_enabled(self, il):
+        # Respect explicit per-instance overrides first.
         try:
-            return bool(getattr(il.arch, "ret_pass_flags", False))
+            explicit = getattr(il.arch, "__dict__", {}).get("ret_pass_flags", None)
+            if explicit is not None:
+                return bool(explicit)
+        except Exception:
+            pass
+
+        # If the architecture explicitly opts in, honor that.
+        try:
+            if getattr(il.arch, "ret_pass_flags", None) is True:
+                return True
+        except Exception:
+            pass
+
+        # Core architectures (not python subclasses) may not expose plugin attrs.
+        # Enable the behavior for known 16-bit x86 names when shadow regs exist.
+        try:
+            arch_name = builtins.str(getattr(il.arch, "name", "")).lower()
+            if arch_name not in self._ret_pass_flag_arch_names:
+                return False
         except Exception:
             return False
+
+        for flag in self._ret_status_flags(il):
+            if self._ret_shadow_register_for_flag(il, flag) is None:
+                return False
+        return True
 
     def _ret_status_flags(self, il):
         try:
