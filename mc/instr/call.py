@@ -133,6 +133,45 @@ class CallNearRM(InstrHasModRegRM, Instr16Bit, Call):
         tokens += self._render_reg_mem()
         return tokens
 
+    def _try_build_synthetic_callvec_target(self, view):
+        """Fallback target for runtime-patched callvec slots.
+
+        Some overlays keep callvec entries zero in static flat images and patch them
+        at runtime. When we can identify the slot symbol, route the call to a stable
+        synthetic target so HLIL can render a semantic call name instead of a large
+        segmented pointer expression.
+        """
+
+        slot_low = self.disp & 0xffff
+        try:
+            get_symbol_at = getattr(view, "get_symbol_at", None)
+            symbol = get_symbol_at(slot_low) if callable(get_symbol_at) else None
+        except Exception:
+            symbol = None
+        if symbol is None:
+            return None
+
+        name = getattr(symbol, "raw_name", None) or getattr(symbol, "name", None) or ""
+        if "callvec" not in str(name).lower():
+            return None
+
+        synth_addr = (0xF0000 + slot_low) & 0xfffff
+
+        try:
+            get_symbol_at = getattr(view, "get_symbol_at", None)
+            existing = get_symbol_at(synth_addr) if callable(get_symbol_at) else None
+            if existing is None:
+                define_auto_symbol = getattr(view, "define_auto_symbol", None)
+                if callable(define_auto_symbol):
+                    from binaryninja import Symbol
+                    from binaryninja.enums import SymbolType
+
+                    define_auto_symbol(Symbol(SymbolType.FunctionSymbol, synth_addr, str(name)))
+        except Exception:
+            pass
+
+        return synth_addr
+
     def _try_resolve_cs_call_table_target(self, il, addr):
         if self._mod_bits() == 0b11:
             return None
@@ -151,9 +190,9 @@ class CallNearRM(InstrHasModRegRM, Instr16Bit, Call):
         if target_off is None:
             return None
         # Zero call-table entries are frequently runtime-patched placeholders.
-        # Keep these indirect so HLIL does not mis-resolve to segment base.
+        # Route known callvec slots to synthetic semantic targets.
         if target_off == 0:
-            return None
+            return self._try_build_synthetic_callvec_target(view)
         return (segment_base + target_off) & 0xfffff
 
     def lift(self, il, addr):
