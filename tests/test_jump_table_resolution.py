@@ -76,3 +76,16 @@ def test_jmp_near_rm_cs_table_prefers_page_base_over_overlay_segment() -> None:
     assert target_expr.op == "CONST_PTR.l"
     assert target_expr.ops == [0x13F29]
 
+
+
+def test_jmp_near_rm_cs_bx_disp16_uses_stable_page_base_expression() -> None:
+    # 2E FF A7 9D A2 => jmp word [cs:bx-0x5d63] (runtime table in EAI1 state0 dispatch).
+    data = bytes.fromhex("2effa79da2")
+    addr = 0x1A299
+    view = FakeView({}, segments=[FakeSegment(0x10000, 0x20000)])
+
+    target_expr = _lift_jump_expr(data, addr, view)
+
+    # This is still indirect, but should avoid `cs<<4` in the lifted expression.
+    assert target_expr.op != "CONST_PTR.l"
+    assert "cs" not in str(target_expr).lower()
