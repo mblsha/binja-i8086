@@ -13,10 +13,22 @@ class FakeSegment:
     end: int
 
 
+@dataclass
+class FakeSymbol:
+    name: str
+    raw_name: str | None = None
+
+
 class FakeView:
-    def __init__(self, memory: dict[int, int], segments: list[FakeSegment] | None = None):
+    def __init__(
+        self,
+        memory: dict[int, int],
+        segments: list[FakeSegment] | None = None,
+        symbols: dict[int, FakeSymbol] | None = None,
+    ):
         self._memory = memory
         self.segments = segments or []
+        self._symbols = symbols or {}
 
     def read(self, addr: int, length: int) -> bytes:
         return bytes(self._memory.get(addr + i, 0) for i in range(length))
@@ -26,6 +38,9 @@ class FakeView:
             if segment.start <= addr < segment.end:
                 return segment
         return None
+
+    def get_symbol_at(self, addr: int):
+        return self._symbols.get(addr)
 
 
 def _lift_call_expr(data: bytes, addr: int, view: FakeView | None):
@@ -132,3 +147,17 @@ def test_call_near_rm_cs_table_resolves_from_il_view_when_source_view_missing() 
     assert target_expr.op == "CONST_PTR.l"
     assert target_expr.ops == [0x13F29]
 
+
+
+def test_call_near_rm_cs_table_zero_entry_uses_synthetic_callvec_target() -> None:
+    data = bytes.fromhex("2eff161220")
+    addr = 0x16179
+    view = FakeView(
+        {0x12012: 0x00, 0x12013: 0x00},
+        symbols={0x2012: FakeSymbol("town_runtime_callvec_2012_draw_main_border")},
+    )
+
+    target_expr = _lift_call_expr(data, addr, view)
+
+    assert target_expr.op == "CONST_PTR.l"
+    assert target_expr.ops == [0xF2012]
