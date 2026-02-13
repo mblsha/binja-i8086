@@ -144,10 +144,59 @@ class JmpNearRM(InstrHasModRegRM, Instr16Bit, Jmp):
             return None
         return (segment_base + target_off) & 0xfffff
 
+    def _try_lift_cs_indirect_target(self, il, addr):
+        """Lift cs:[..] near-indirect jumps with a stable page base.
+
+        For runtime flat images, replacing `cs<<4` with the mapped 64K page base
+        makes HLIL less noisy (no synthetic entry_cs temp) while preserving the
+        segmented addressing semantics.
+        """
+
+        if self._mod_bits() == 0b11:
+            return None
+        if self.segment() != "cs":
+            return None
+
+        view = self._view_from_il(il)
+        if view is None:
+            return None
+
+        segment_base = self._segment_base_for_addr(view, addr)
+
+        def _zext16(expr):
+            zero_extend = getattr(il, "zero_extend", None)
+            if callable(zero_extend):
+                try:
+                    return zero_extend(3, expr)
+                except Exception:
+                    pass
+            return il.and_expr(3, il.const(3, 0xFFFF), il.sign_extend(3, expr))
+
+        offset = self._lift_reg_mem(il, only_calc_addr=True)
+        slot_phys = il.add(
+            3,
+            self._const_addr(il, segment_base),
+            _zext16(offset),
+        )
+        slot_phys = il.and_expr(3, il.const(3, 0xFFFFF), slot_phys)
+
+        target_off = il.load(2, slot_phys)
+        target_phys = il.add(
+            3,
+            self._const_addr(il, segment_base),
+            _zext16(target_off),
+        )
+        target_phys = il.and_expr(3, il.const(3, 0xFFFFF), target_phys)
+        return target_phys
+
     def lift(self, il, addr):
         resolved = self._try_resolve_cs_jump_table_target(il, addr)
         if resolved is not None:
             il.append(il.jump(self._const_addr(il, resolved)))
+            return
+        cs_indirect = self._try_lift_cs_indirect_target(il, addr)
+        if cs_indirect is not None:
+            il.append(il.jump(cs_indirect))
             return
         il.append(il.jump(self._lift_phys_addr(il, self.segment(), self._lift_reg_mem(il))))
 
