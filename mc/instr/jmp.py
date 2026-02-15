@@ -190,14 +190,15 @@ class JmpNearRM(InstrHasModRegRM, Instr16Bit, Jmp):
         return target_phys
 
     def lift(self, il, addr):
-        resolved = self._try_resolve_cs_jump_table_target(il, addr)
-        if resolved is not None:
-            il.append(il.jump(self._const_addr(il, resolved)))
-            return
-        cs_indirect = self._try_lift_cs_indirect_target(il, addr)
-        if cs_indirect is not None:
-            il.append(il.jump(cs_indirect))
-            return
+        if self._cs_table_lift_enabled(il):
+            resolved = self._try_resolve_cs_jump_table_target(il, addr)
+            if resolved is not None:
+                il.append(il.jump(self._const_addr(il, resolved)))
+                return
+            cs_indirect = self._try_lift_cs_indirect_target(il, addr)
+            if cs_indirect is not None:
+                il.append(il.jump(cs_indirect))
+                return
         il.append(il.jump(self._lift_phys_addr(il, self.segment(), self._lift_reg_mem(il))))
 
 

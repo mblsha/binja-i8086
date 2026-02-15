@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from binja_test_mocks.mock_llil import MockLowLevelILFunction
 
-from binja_i8086.architecture import Intel8086
+from binja_i8086.architecture import Intel8086, Intel8086Vanilla
 
 
 @dataclass
@@ -28,8 +28,9 @@ class FakeView:
         return None
 
 
-def _lift_jump_expr(data: bytes, addr: int, view: FakeView | None):
-    arch = Intel8086()
+def _lift_jump_expr(data: bytes, addr: int, view: FakeView | None, arch: Intel8086 | None = None):
+    if arch is None:
+        arch = Intel8086()
     il = MockLowLevelILFunction(arch)
     if view is not None:
         il.source_function.view = view
@@ -59,6 +60,28 @@ def test_jmp_near_rm_cs_table_zero_entry_stays_indirect() -> None:
     view = FakeView({0x16032: 0x00, 0x16033: 0x00})
 
     target_expr = _lift_jump_expr(data, addr, view)
+
+    assert target_expr.op != "CONST_PTR.l"
+
+
+def test_jmp_near_rm_cs_table_lift_can_be_disabled() -> None:
+    data = bytes.fromhex("ff263260")
+    addr = 0x1A51E
+    view = FakeView({0x16032: 0xD5, 0x16033: 0x96})
+    arch = Intel8086()
+    arch.cs_table_lift = False
+
+    target_expr = _lift_jump_expr(data, addr, view, arch)
+
+    assert target_expr.op != "CONST_PTR.l"
+
+
+def test_jmp_near_rm_cs_table_lift_disabled_by_vanilla_arch() -> None:
+    data = bytes.fromhex("ff263260")
+    addr = 0x1A51E
+    view = FakeView({0x16032: 0xD5, 0x16033: 0x96})
+
+    target_expr = _lift_jump_expr(data, addr, view, Intel8086Vanilla())
 
     assert target_expr.op != "CONST_PTR.l"
 

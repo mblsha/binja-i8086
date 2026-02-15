@@ -17,6 +17,17 @@ def test_calling_conventions_registered_on_8086() -> None:
     assert arch.default_calling_convention.name == "regparm"
 
 
+def test_calling_conventions_registered_on_8086_vanilla() -> None:
+    import binja_i8086.architecture  # noqa: F401
+    import binja_i8086.callingconv  # noqa: F401
+
+    arch = bn.Architecture["8086-vanilla"]
+    names = set(arch.calling_conventions.keys())
+
+    assert {"default", "regparm", "regcall", "cdecl", "pascal"}.issubset(names)
+    assert arch.default_calling_convention.name == "regparm"
+
+
 def test_intel8086_callconv_handles_invalid_incoming_regs() -> None:
     import binja_i8086.architecture  # noqa: F401
     import binja_i8086.callingconv as callingconv
