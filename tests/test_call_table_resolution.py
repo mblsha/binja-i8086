@@ -186,6 +186,20 @@ def test_call_near_rm_cs_table_zero_entry_uses_synthetic_callvec_target() -> Non
     assert target_expr.ops == [0xF2012]
 
 
+def test_call_near_rm_cs_table_zero_entry_uses_mapped_slot_symbol_for_callvec() -> None:
+    data = bytes.fromhex("2eff161220")
+    addr = 0x16179
+    view = FakeView(
+        {0x12012: 0x00, 0x12013: 0x00},
+        symbols={0x12012: FakeSymbol("town_runtime_callvec_2012_draw_main_border")},
+    )
+
+    target_expr = _lift_call_expr(data, addr, view)
+
+    assert target_expr.op == "CONST_PTR.l"
+    assert target_expr.ops == [0xF2012]
+
+
 def test_call_near_imm_uses_const_pointer_target() -> None:
     # E8 6F 00 at 0x1A476 -> target 0x1A4E8.
     data = bytes.fromhex("e86f00")

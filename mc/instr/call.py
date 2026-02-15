@@ -133,7 +133,7 @@ class CallNearRM(InstrHasModRegRM, Instr16Bit, Call):
         tokens += self._render_reg_mem()
         return tokens
 
-    def _try_build_synthetic_callvec_target(self, view):
+    def _try_build_synthetic_callvec_target(self, view, slot_addr):
         """Fallback target for runtime-patched callvec slots.
 
         Some overlays keep callvec entries zero in static flat images and patch them
@@ -142,10 +142,15 @@ class CallNearRM(InstrHasModRegRM, Instr16Bit, Call):
         segmented pointer expression.
         """
 
-        slot_low = self.disp & 0xffff
+        slot_addr = slot_addr & 0xfffff
+        slot_low = slot_addr & 0xffff
         try:
             get_symbol_at = getattr(view, "get_symbol_at", None)
-            symbol = get_symbol_at(slot_low) if callable(get_symbol_at) else None
+            symbol = get_symbol_at(slot_addr) if callable(get_symbol_at) else None
+            if symbol is None and callable(get_symbol_at):
+                # Compatibility fallback for views that still attach these symbols
+                # to low 16-bit addresses.
+                symbol = get_symbol_at(slot_low)
         except Exception:
             symbol = None
         if symbol is None:
@@ -192,7 +197,7 @@ class CallNearRM(InstrHasModRegRM, Instr16Bit, Call):
         # Zero call-table entries are frequently runtime-patched placeholders.
         # Route known callvec slots to synthetic semantic targets.
         if target_off == 0:
-            return self._try_build_synthetic_callvec_target(view)
+            return self._try_build_synthetic_callvec_target(view, slot_addr)
         return (segment_base + target_off) & 0xfffff
 
     def lift(self, il, addr):
