@@ -67,7 +67,7 @@ def test_near_call_and_ret_propagate_status_flags() -> None:
 
     call_llil = _lift_to_llil(arch, b"\xE8\x00\x00")
     assert call_llil == [
-        mllil("CALL", [mllil("CONST.l", [0x1003])]),
+        mllil("CALL", [mllil("CONST_PTR.l", [0x1003])]),
         *_expected_flag_restores(),
     ]
 
@@ -94,7 +94,7 @@ def test_ret_pass_flags_can_be_disabled_per_arch_instance() -> None:
     arch.ret_pass_flags = False
 
     call_llil = _lift_to_llil(arch, b"\xE8\x00\x00")
-    assert call_llil == [mllil("CALL", [mllil("CONST.l", [0x1003])])]
+    assert call_llil == [mllil("CALL", [mllil("CONST_PTR.l", [0x1003])])]
 
     ret_llil = _lift_to_llil(arch, b"\xC3")
     assert ret_llil == [mllil("RET", [mllil("POP.w", [])])]
@@ -108,7 +108,7 @@ def test_ret_pass_flags_fallback_for_x86_16_core_style_arch() -> None:
 
     call_llil = _lift_to_llil(arch, b"\xE8\x00\x00")
     assert call_llil == [
-        mllil("CALL", [mllil("CONST.l", [0x1003])]),
+        mllil("CALL", [mllil("CONST_PTR.l", [0x1003])]),
         *_expected_flag_restores(),
     ]
 
@@ -125,7 +125,7 @@ def test_signed_branch_after_call_uses_restored_signed_flags() -> None:
     call_then_jg = b"\xE8\x00\x00\x7F\x00"
     llil = _lift_block_to_llil(arch, call_then_jg)
 
-    assert llil[0] == mllil("CALL", [mllil("CONST.l", [0x1003])])
+    assert llil[0] == mllil("CALL", [mllil("CONST_PTR.l", [0x1003])])
     assert llil[1 : 1 + len(STATUS_FLAGS)] == _expected_flag_restores()
     # jg maps to signed-greater-than and requires z/s/o to be available.
     if_node = llil[1 + len(STATUS_FLAGS)]

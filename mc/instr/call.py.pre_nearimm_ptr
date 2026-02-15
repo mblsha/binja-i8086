@@ -116,7 +116,7 @@ class CallNearImm(Call):
         return tokens
 
     def lift(self, il, addr):
-        il.append(il.call(self._const_addr(il, self.ip)))
+        il.append(il.call(il.const(3, self.ip)))
         self._lift_restore_status_flags(il)
 
 
