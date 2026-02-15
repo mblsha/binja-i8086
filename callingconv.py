@@ -76,4 +76,5 @@ def _register_for_arch(arch_name):
 
 
 _register_for_arch('8086')
+_register_for_arch('8086-vanilla')
 _register_for_arch('x86_16')

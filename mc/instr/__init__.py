@@ -27,6 +27,7 @@ class Instruction(object):
         "o": "ro",
     }
     _ret_pass_flag_arch_names = {"8086", "x86_16"}
+    _cs_table_lift_disabled_suffixes = ("-vanilla",)
 
     def __new__(cls, decoder=None):
         if decoder is None:
@@ -145,6 +146,31 @@ class Instruction(object):
             return il.const_pointer(3, addr)
         except Exception:
             return il.const(3, addr)
+
+    def _cs_table_lift_enabled(self, il):
+        try:
+            explicit = getattr(il.arch, "__dict__", {}).get("cs_table_lift", None)
+            if explicit is not None:
+                return bool(explicit)
+        except Exception:
+            pass
+
+        try:
+            value = getattr(il.arch, "cs_table_lift", None)
+            if value is not None:
+                return bool(value)
+        except Exception:
+            pass
+
+        try:
+            arch_name = builtins.str(getattr(il.arch, "name", "")).lower()
+        except Exception:
+            return True
+
+        for suffix in self._cs_table_lift_disabled_suffixes:
+            if arch_name.endswith(suffix):
+                return False
+        return True
 
     def _ret_pass_flags_enabled(self, il):
         # Respect explicit per-instance overrides first.

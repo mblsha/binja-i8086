@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from binaryninja.enums import BranchType
 from binja_test_mocks.mock_llil import MockLowLevelILFunction
 
-from binja_i8086.architecture import Intel8086
+from binja_i8086.architecture import Intel8086, Intel8086Vanilla
 
 
 BASE = 0x1000
@@ -15,10 +16,17 @@ def _render_text(tokens) -> str:
 def test_basic_metadata() -> None:
     arch = Intel8086()
     assert arch.name == "8086"
+    assert arch.cs_table_lift is True
     assert arch.stack_pointer == "sp"
     assert arch.address_size == 3
     assert "ax" in arch.regs
     assert "cs" in arch.regs
+
+
+def test_vanilla_arch_disables_custom_cs_table_lift() -> None:
+    arch = Intel8086Vanilla()
+    assert arch.name == "8086-vanilla"
+    assert arch.cs_table_lift is False
 
 
 def test_disassembly_analysis_and_llil_for_known_instructions() -> None:
@@ -61,3 +69,11 @@ def test_convert_to_nop_preserves_length() -> None:
     arch = Intel8086()
     data = b"\x90\x74\x02\xC3"
     assert arch.convert_to_nop(data, BASE) == b"\x90" * len(data)
+
+
+def test_indirect_call_uses_call_branch_type() -> None:
+    arch = Intel8086()
+    info = arch.get_instruction_info(bytes.fromhex("ff17"), BASE)
+    assert info is not None
+    assert len(info.branches) == 1
+    assert info.branches[0].type == BranchType.CallDestination

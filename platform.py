@@ -40,4 +40,5 @@ dos.cdecl_calling_convention = arch.calling_conventions['cdecl']
 dos.register('dos')
 
 _set_platform_defaults_for_arch('8086')
+_set_platform_defaults_for_arch('8086-vanilla')
 _set_platform_defaults_for_arch('x86_16')
