@@ -12,5 +12,8 @@ def test_package_import_registers_architecture_and_dos_platform() -> None:
     arch = bn.Architecture["8086"]
     assert arch is not None
 
+    vanilla_arch = bn.Architecture["8086-vanilla"]
+    assert vanilla_arch is not None
+
     dos = bn.Platform["dos-8086"]
     assert dos is not None

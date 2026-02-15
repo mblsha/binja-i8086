@@ -126,7 +126,7 @@ class CallNearRM(InstrHasModRegRM, Instr16Bit, Call):
 
     def analyze(self, info, addr):
         Call.analyze(self, info, addr)
-        info.add_branch(BranchType.IndirectBranch)
+        info.add_branch(BranchType.CallDestination)
 
     def render(self, addr):
         tokens = Call.render(self, addr)
@@ -196,11 +196,12 @@ class CallNearRM(InstrHasModRegRM, Instr16Bit, Call):
         return (segment_base + target_off) & 0xfffff
 
     def lift(self, il, addr):
-        resolved = self._try_resolve_cs_call_table_target(il, addr)
-        if resolved is not None:
-            il.append(il.call(self._const_addr(il, resolved)))
-            self._lift_restore_status_flags(il)
-            return
+        if self._cs_table_lift_enabled(il):
+            resolved = self._try_resolve_cs_call_table_target(il, addr)
+            if resolved is not None:
+                il.append(il.call(self._const_addr(il, resolved)))
+                self._lift_restore_status_flags(il)
+                return
 
         il.append(il.call(self._lift_phys_addr(il, self.segment(), self._lift_reg_mem(il))))
         self._lift_restore_status_flags(il)

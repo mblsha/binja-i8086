@@ -14,10 +14,17 @@ except ImportError:
     import mc
 
 
-__all__ = ['Intel8086']
+__all__ = ['Intel8086', 'Intel8086Vanilla']
 
 RET_PASS_FLAGS_BY_ARCH = {
     "8086": True,
+    "8086-vanilla": True,
+}
+
+CS_TABLE_LIFT_BY_ARCH = {
+    "8086": True,
+    "8086-vanilla": False,
+    "x86_16": True,
 }
 
 RET_STATUS_FLAGS = ("c", "p", "a", "z", "s", "o")
@@ -134,10 +141,12 @@ class Intel8086(Architecture):
     ret_status_flags = RET_STATUS_FLAGS
     ret_flag_shadow_regs = RET_FLAG_SHADOW_REGS
     ret_pass_flags = False
+    cs_table_lift = True
 
     def __init__(self):
         super().__init__()
         self.ret_pass_flags = RET_PASS_FLAGS_BY_ARCH.get(self.name, False)
+        self.cs_table_lift = CS_TABLE_LIFT_BY_ARCH.get(self.name, True)
 
     def _flag_expr_width(self, size):
         if isinstance(size, int) and size > 0:
@@ -343,7 +352,12 @@ class Intel8086(Architecture):
         branch = branch.to_inverted()
         return mc.encode(branch, addr)
 
+class Intel8086Vanilla(Intel8086):
+    name = "8086-vanilla"
+
+
 Intel8086.register()
+Intel8086Vanilla.register()
 
 
 if ArchitectureHook is not None:
@@ -355,17 +369,48 @@ if ArchitectureHook is not None:
             super().__init__(base_arch)
 
         @staticmethod
-        def _should_use_custom_lift(decoded):
+        def _custom_lift_enabled(arch):
+            if arch is None:
+                return True
+            try:
+                explicit = getattr(arch, "__dict__", {}).get("cs_table_lift", None)
+                if explicit is not None:
+                    return bool(explicit)
+            except Exception:
+                pass
+            try:
+                value = getattr(arch, "cs_table_lift", None)
+                if value is not None:
+                    return bool(value)
+            except Exception:
+                pass
+            return CS_TABLE_LIFT_BY_ARCH.get(getattr(arch, "name", ""), True)
+
+        @staticmethod
+        def _is_cs_table_form(instr):
+            if not isinstance(instr, (mc.instr.call.CallNearRM, mc.instr.jmp.JmpNearRM)):
+                return False
+            try:
+                if instr._mod_bits() != 0b00 or instr._reg_mem_bits() != 0b110:
+                    return False
+                return instr.segment() == "cs"
+            except Exception:
+                return False
+
+        @classmethod
+        def _should_use_custom_lift(cls, decoded, arch=None):
             if decoded is None:
+                return False
+            if not cls._custom_lift_enabled(arch):
                 return False
 
             try:
-                if isinstance(decoded, (mc.instr.call.CallNearRM, mc.instr.jmp.JmpNearRM)):
+                if cls._is_cs_table_form(decoded):
                     return True
 
                 if isinstance(decoded, mc.instr.seg.Segment):
                     nxt = getattr(decoded, "next", None)
-                    if isinstance(nxt, (mc.instr.call.CallNearRM, mc.instr.jmp.JmpNearRM)):
+                    if cls._is_cs_table_form(nxt):
                         return True
             except Exception:
                 return False
@@ -391,7 +436,7 @@ if ArchitectureHook is not None:
 
         def get_instruction_low_level_il(self, data, addr, il):
             decoded = mc.decode(data, addr)
-            if self._should_use_custom_lift(decoded):
+            if self._should_use_custom_lift(decoded, self.base_arch):
                 try:
                     self._attach_view_if_missing(il)
                     decoded.lift(il, addr)
@@ -406,7 +451,13 @@ if ArchitectureHook is not None:
 _x86_16_call_table_hook = None
 if ArchitectureHook is not None:
     try:
-        _x86_16_call_table_hook = X86_16CallTableHook(Architecture["x86_16"])
+        _x86_16_arch = Architecture["x86_16"]
+        try:
+            if getattr(_x86_16_arch, "__dict__", {}).get("cs_table_lift", None) is None:
+                _x86_16_arch.cs_table_lift = CS_TABLE_LIFT_BY_ARCH.get("x86_16", True)
+        except Exception:
+            pass
+        _x86_16_call_table_hook = X86_16CallTableHook(_x86_16_arch)
         _x86_16_call_table_hook.register()
     except Exception:
         _x86_16_call_table_hook = None
