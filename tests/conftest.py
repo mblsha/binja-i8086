@@ -83,6 +83,12 @@ def _install_enum_shims() -> None:
             "OddParityFlagRole",
             getattr(enums.FlagRole, "SpecialFlagRole", getattr(enums.FlagRole, "CarryFlagRole")),
         )
+    if not hasattr(enums.FlagRole, "EvenParityFlagRole"):
+        setattr(
+            enums.FlagRole,
+            "EvenParityFlagRole",
+            getattr(enums.FlagRole, "SpecialFlagRole", getattr(enums.FlagRole, "CarryFlagRole")),
+        )
 
     if not hasattr(enums.BranchType, "SystemCall"):
         setattr(
@@ -90,6 +96,8 @@ def _install_enum_shims() -> None:
             "SystemCall",
             getattr(enums.BranchType, "CallDestination", enums.BranchType.UnresolvedBranch),
         )
+    if not hasattr(enums.BranchType, "IndirectBranch"):
+        setattr(enums.BranchType, "IndirectBranch", enums.BranchType.UnresolvedBranch)
 
     # Binary view code marks code/data contents via segment flags.
     if not hasattr(enums.SegmentFlag, "SegmentContainsCode"):
@@ -239,12 +247,44 @@ def _install_llil_shim() -> None:
 
         @property
         def temp_reg_count(self):  # type: ignore[override]
-            # Match BN's monotonically increasing temp register allocator.
-            current = getattr(self, "_temp_reg_count", 0)
-            self._temp_reg_count = current + 1
-            return current
+            # Binary Ninja reports the number of temporaries already inserted
+            # into the function.  Reading this property does not reserve one.
+            return getattr(self, "_temp_reg_count", 0)
 
         llil_cls.temp_reg_count = temp_reg_count
+
+        original_append = llil_cls.append
+
+        def append(self, expression):  # type: ignore[override]
+            result = original_append(self, expression)
+
+            def visit(value):
+                if isinstance(value, mock_llil.MockReg) and value.name.startswith("TEMP"):
+                    suffix = value.name[4:]
+                    if suffix.isdigit():
+                        self._temp_reg_count = max(
+                            getattr(self, "_temp_reg_count", 0), int(suffix) + 1
+                        )
+                elif type(value).__name__ == "ILRegister":
+                    index = getattr(value, "index", None)
+                    if isinstance(index, int) and index >= 0x80000000:
+                        self._temp_reg_count = max(
+                            getattr(self, "_temp_reg_count", 0), index - 0x80000000 + 1
+                        )
+                elif isinstance(value, mock_llil.MockIntrinsic):
+                    visit(value.outputs)
+                    visit(value.params)
+                elif isinstance(value, mock_llil.MockLLIL):
+                    for operand in value.ops:
+                        visit(operand)
+                elif isinstance(value, (list, tuple)):
+                    for item in value:
+                        visit(item)
+
+            visit(expression)
+            return result
+
+        llil_cls.append = append
 
     def _add_method(method_name: str, op_name: str, sized: bool):
         if hasattr(llil_cls, method_name):
@@ -283,12 +323,19 @@ def _install_llil_shim() -> None:
     _add_method("low_part", "LOW_PART", True)
     _add_method("set_reg_split", "SET_REG_SPLIT", True)
     _add_method("sign_extend", "SX", True)
+    _add_method("zero_extend", "ZX", True)
     _add_method("neg_expr", "NEG", True)
     _add_method("not_expr", "NOT", True)
     _add_method("div_unsigned", "DIVU", True)
     _add_method("mod_unsigned", "MODU", True)
     _add_method("mod_signed", "MODS", True)
     _add_method("arith_shift_right", "ASR", True)
+    _add_method("mult_double_prec_signed", "MULS_DP", True)
+    _add_method("mult_double_prec_unsigned", "MULU_DP", True)
+    _add_method("div_double_prec_signed", "DIVS_DP", True)
+    _add_method("div_double_prec_unsigned", "DIVU_DP", True)
+    _add_method("mod_double_prec_signed", "MODS_DP", True)
+    _add_method("mod_double_prec_unsigned", "MODU_DP", True)
 
     llil_cls._binja_i8086_llil_patch = True
 

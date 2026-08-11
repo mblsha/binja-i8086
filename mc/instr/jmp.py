@@ -32,7 +32,7 @@ class JmpFarImm(Jmp):
         encoder.unsigned_word(self.cs)
 
     def target(self):
-        return (self.cs << 4) + self.ip
+        return ((self.cs << 4) + self.ip) & 0xfffff
 
     def analyze(self, info, addr):
         Jmp.analyze(self, info, addr)
@@ -74,7 +74,7 @@ class JmpFarMem(InstrHasModRegRM, Instr16Bit, Jmp):
             il.append(il.undefined())
             return
 
-        cs, ip = self._lift_load_far(il, self._lift_reg_mem(il))
+        cs, ip = self._lift_load_far(il, self._lift_reg_mem_addr(il))
         il.append(il.set_reg(2, 'cs', cs))
         il.append(il.jump(self._lift_phys_addr(il, cs, ip)))
 
@@ -85,20 +85,21 @@ class JmpNearImm(Jmp):
 
     def decode(self, decoder, addr):
         Jmp.decode(self, decoder, addr)
-        self.ip = addr + self.length() + decoder.signed_word()
+        self.ip = self._near_target(addr, self.length(), decoder.signed_word())
 
     def encode(self, encoder, addr):
         Jmp.encode(self, encoder, addr)
-        encoder.signed_word(self.ip - addr - self.length())
+        encoder.signed_word(self._near_displacement(addr, self.length(), self.ip))
 
     def analyze(self, info, addr):
         Jmp.analyze(self, info, addr)
         info.add_branch(BranchType.UnconditionalBranch, self.ip)
 
     def render(self, addr):
+        rel = self._near_displacement(addr, 0, self.ip)
         tokens = Jmp.render(self, addr)
         tokens += asm(
-            ('codeRelAddr', fmt_code_rel(self.ip - addr), self.ip),
+            ('codeRelAddr', fmt_code_rel(rel), self.ip),
         )
         return tokens
 
@@ -111,9 +112,6 @@ class JmpNearImm(Jmp):
 
 
 class JmpNearRM(InstrHasModRegRM, Instr16Bit, Jmp):
-    def _default_segment(self):
-        return 'cs'
-
     def analyze(self, info, addr):
         Jmp.analyze(self, info, addr)
         info.add_branch(BranchType.IndirectBranch)
@@ -128,7 +126,7 @@ class JmpNearRM(InstrHasModRegRM, Instr16Bit, Jmp):
             return None
         if not (self._mod_bits() == 0b00 and self._reg_mem_bits() == 0b110):
             return None
-        if self.segment() != "cs":
+        if self.segment_override != "cs":
             return None
 
         view = self._view_from_il(il)
@@ -154,7 +152,7 @@ class JmpNearRM(InstrHasModRegRM, Instr16Bit, Jmp):
 
         if self._mod_bits() == 0b11:
             return None
-        if self.segment() != "cs":
+        if self.segment_override != "cs":
             return None
 
         view = self._view_from_il(il)
@@ -180,7 +178,7 @@ class JmpNearRM(InstrHasModRegRM, Instr16Bit, Jmp):
         )
         slot_phys = il.and_expr(3, il.const(3, 0xFFFFF), slot_phys)
 
-        target_off = il.load(2, slot_phys)
+        target_off = self._lift_mem_load(il, 2, slot_phys)
         target_phys = il.add(
             3,
             self._const_addr(il, segment_base),
@@ -199,7 +197,8 @@ class JmpNearRM(InstrHasModRegRM, Instr16Bit, Jmp):
             if cs_indirect is not None:
                 il.append(il.jump(cs_indirect))
                 return
-        il.append(il.jump(self._lift_phys_addr(il, self.segment(), self._lift_reg_mem(il))))
+        target_off = self._lift_reg_mem(il)
+        il.append(il.jump(self._lift_phys_addr(il, 'cs', target_off)))
 
 
 class JmpShort(Jmp):
@@ -208,20 +207,21 @@ class JmpShort(Jmp):
 
     def decode(self, decoder, addr):
         Jmp.decode(self, decoder, addr)
-        self.ip = addr + self.length() + decoder.signed_byte()
+        self.ip = self._near_target(addr, self.length(), decoder.signed_byte())
 
     def encode(self, encoder, addr):
         Jmp.encode(self, encoder, addr)
-        encoder.signed_byte(self.ip - addr - self.length())
+        encoder.signed_byte(self._near_displacement(addr, self.length(), self.ip))
 
     def analyze(self, info, addr):
         Jmp.analyze(self, info, addr)
         info.add_branch(BranchType.UnconditionalBranch, self.ip)
 
     def render(self, addr):
+        rel = self._near_displacement(addr, 0, self.ip)
         tokens = Jmp.render(self, addr)
         tokens += asm(
-            ('codeRelAddr', fmt_code_rel(self.ip - addr), self.ip),
+            ('codeRelAddr', fmt_code_rel(rel), self.ip),
         )
         return tokens
 
@@ -252,10 +252,11 @@ class JmpCond(JmpShort):
     def analyze(self, info, addr):
         Jmp.analyze(self, info, addr)
         info.add_branch(BranchType.TrueBranch, self.ip)
-        info.add_branch(BranchType.FalseBranch, addr + self.length())
+        info.add_branch(BranchType.FalseBranch, self._near_target(addr, self.length(), 0))
 
     def lift(self, il, addr):
-        untaken_label = il.get_label_for_address(il.arch, addr + self.length())
+        untaken_addr = self._near_target(addr, self.length(), 0)
+        untaken_label = il.get_label_for_address(il.arch, untaken_addr)
         if untaken_label is None:
             mark_untaken = True
             untaken_label = LowLevelILLabel()
@@ -296,7 +297,8 @@ class Loop(JmpCond):
         return cond
 
     def lift(self, il, addr):
-        untaken_label = il.get_label_for_address(il.arch, addr + self.length())
+        untaken_addr = self._near_target(addr, self.length(), 0)
+        untaken_label = il.get_label_for_address(il.arch, untaken_addr)
         if untaken_label is None:
             mark_untaken = True
             untaken_label = LowLevelILLabel()

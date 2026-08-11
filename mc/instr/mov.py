@@ -41,7 +41,7 @@ class MovRegImm(InstrHasImm, InstrHasWidth, Mov):
 class MovMemImm(InstrHasImm, InstrHasModRegRM, InstrHasWidth, Mov):
     def render(self, addr):
         if self._reg_bits() != 0b000:
-            return Mov.render(self) + asm(
+            return Mov.render(self, addr) + asm(
                 ('text', 'illegal')
             )
 
@@ -54,8 +54,11 @@ class MovMemImm(InstrHasImm, InstrHasModRegRM, InstrHasWidth, Mov):
         return tokens
 
     def lift(self, il, addr):
+        if self._reg_bits() != 0b000:
+            il.append(il.undefined())
+            return
         w = self.width()
-        il.append(self._lift_reg_mem(il, store=il.const(w, self.imm)))
+        self._lift_set_reg_mem(il, il.const(w, self.imm))
 
 
 class MovRMReg(InstrHasModRegRM, InstrHasWidth, Mov):
@@ -73,7 +76,7 @@ class MovRMReg(InstrHasModRegRM, InstrHasWidth, Mov):
 
     def lift(self, il, addr):
         w = self.width()
-        il.append(self._lift_reg_mem(il, store=il.reg(w, self.src_reg())))
+        self._lift_set_reg_mem(il, il.reg(w, self.src_reg()))
 
 
 class MovRegRM(InstrHasModRegRM, InstrHasWidth, Mov):
@@ -140,7 +143,7 @@ class MovMemAcc(MovMem):
 
     def lift(self, il, addr):
         w = self.width()
-        il.append(self._lift_mem(il, store=il.reg(w, self.src_reg())))
+        self._lift_set_mem(il, il.reg(w, self.src_reg()))
 
 
 class MovRMSeg(InstrHasModRegRM, Instr16Bit, Mov):
@@ -164,7 +167,7 @@ class MovRMSeg(InstrHasModRegRM, Instr16Bit, Mov):
             il.append(il.undefined())
             return
 
-        il.append(self._lift_reg_mem(il, store=il.reg(2, self.src_reg())))
+        self._lift_set_reg_mem(il, il.reg(2, self.src_reg()))
 
 
 class MovSegRM(InstrHasModRegRM, Instr16Bit, Mov):
@@ -172,7 +175,7 @@ class MovSegRM(InstrHasModRegRM, Instr16Bit, Mov):
         return reg_seg[self._reg_bits()]
 
     def render(self, addr):
-        if self._reg_bits() & 0b100:
+        if self._reg_bits() == 0b001 or self._reg_bits() & 0b100:
             return asm(('instr', '(unassigned)'))
 
         tokens = Mov.render(self, addr)
@@ -184,7 +187,7 @@ class MovSegRM(InstrHasModRegRM, Instr16Bit, Mov):
         return tokens
 
     def lift(self, il, addr):
-        if self._reg_bits() & 0b100:
+        if self._reg_bits() == 0b001 or self._reg_bits() & 0b100:
             il.append(il.undefined())
             return
 
@@ -221,7 +224,7 @@ class LSegRegRM(InstrHasModRegRM, Instr16Bit, Instruction):
             il.append(il.undefined())
             return
 
-        seg, off = self._lift_load_far(il, self._lift_reg_mem(il))
+        seg, off = self._lift_load_far(il, self._lift_reg_mem_addr(il))
         il.append(il.set_reg(2, self.seg_reg(), seg))
         il.append(il.set_reg(2, self.dst_reg(), off))
 
@@ -231,7 +234,7 @@ class Xlat(InstrHasSegment, Instruction):
         return 'xlat'
 
     def lift(self, il, addr):
-        off  = il.add(2, il.reg(2, 'bx'), il.reg(1, 'al'))
+        off  = il.add(2, il.reg(2, 'bx'), il.zero_extend(2, il.reg(1, 'al')))
         phys = self._lift_phys_addr(il, self.segment(), off)
         il.append(il.set_reg(1, 'al', il.load(1, phys)))
 
@@ -241,7 +244,7 @@ class LahF(Instruction):
         return 'lahf'
 
     def lift(self, il, addr):
-        flags = il.const(1, 0b10)
+        flags = il.and_expr(1, il.undefined(), il.const(1, 0x2a))
         for flag, flag_bit in flags_bits:
             if flag_bit > 7:
                 break

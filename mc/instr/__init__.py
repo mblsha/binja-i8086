@@ -70,11 +70,28 @@ class Instruction(object):
             seg = il.reg(2, seg)
         if isinstance(disp, builtins.str) and disp in il.arch.regs:
             disp = il.reg(2, disp)
+        # Address arithmetic is 20-bit; explicitly widen the architectural
+        # 16-bit segment/offset values before using 3-byte LLIL operations.
+        seg = il.zero_extend(3, seg)
+        disp = il.zero_extend(3, disp)
         base = il.shift_left(3, seg, il.const(1, 4))
         phys = il.add(3, base, disp)
         if a20_gate:
             phys = il.and_expr(3, il.const(3, 0xfffff), phys)
         return phys
+
+    @staticmethod
+    def _near_target(addr, instr_len, displacement):
+        """Return a flat address while preserving 8086 IP wrap semantics."""
+        segment_page = builtins.int(addr) & ~0xffff
+        ip = (builtins.int(addr) + builtins.int(instr_len) + builtins.int(displacement)) & 0xffff
+        return segment_page | ip
+
+    @staticmethod
+    def _near_displacement(addr, instr_len, target):
+        base_ip = (builtins.int(addr) + builtins.int(instr_len)) & 0xffff
+        delta = (builtins.int(target) - base_ip) & 0xffff
+        return delta - 0x10000 if delta & 0x8000 else delta
 
     def _view_from_il(self, il):
         try:
@@ -131,13 +148,16 @@ class Instruction(object):
 
     def _read_u16(self, view, addr):
         try:
-            raw = view.read(builtins.int(addr), 2)
-            if raw is None:
+            addr = builtins.int(addr)
+            low = view.read(addr & 0xfffff, 1)
+            high = view.read((addr + 1) & 0xfffff, 1)
+            if low is None or high is None:
                 return None
-            raw = bytes(raw)
-            if len(raw) < 2:
+            low = bytes(low)
+            high = bytes(high)
+            if len(low) < 1 or len(high) < 1:
                 return None
-            return builtins.int.from_bytes(raw[:2], "little")
+            return low[0] | (high[0] << 8)
         except Exception:
             return None
 
@@ -254,13 +274,75 @@ class Instruction(object):
 
     def _lift_load_far(self, il, addr):
         seg_off = LLIL_TEMP(il.temp_reg_count)
-        il.append(il.set_reg(4, seg_off, il.load(4, addr)))
+        il.append(il.set_reg(4, seg_off, self._lift_mem_load(il, 4, addr)))
         seg     = LLIL_TEMP(il.temp_reg_count)
-        il.append(il.set_reg(2, seg, il.logical_shift_right(2, il.reg(4, seg_off),
-                                                            il.const(1, 16))))
+        seg_value = il.logical_shift_right(4, il.reg(4, seg_off), il.const(1, 16))
+        il.append(il.set_reg(2, seg, il.low_part(2, seg_value)))
         off     = LLIL_TEMP(il.temp_reg_count)
         il.append(il.set_reg(2, off, il.low_part(2, il.reg(4, seg_off))))
         return il.reg(2, seg), il.reg(2, off)
+
+    def _lift_mem_byte_addr(self, il, addr, byte_offset):
+        if byte_offset == 0:
+            return addr
+        result = il.add(3, addr, il.const(3, byte_offset))
+        if a20_gate:
+            result = il.and_expr(3, il.const(3, 0xfffff), result)
+        return result
+
+    def _lift_mem_load(self, il, size, addr):
+        """Load little-endian memory with the 8086's 20-bit bus wrap."""
+        if size == 1:
+            return il.load(1, addr)
+
+        result = il.zero_extend(size, il.load(1, addr))
+        for byte_offset in range(1, size):
+            byte = il.load(1, self._lift_mem_byte_addr(il, addr, byte_offset))
+            byte = il.zero_extend(size, byte)
+            byte = il.shift_left(size, byte, il.const(1, byte_offset * 8))
+            result = il.or_expr(size, result, byte)
+        return result
+
+    def _lift_mem_store(self, il, size, addr, value):
+        """Store little-endian memory with the 8086's 20-bit bus wrap."""
+        if size == 1:
+            il.append(il.store(1, addr, value))
+            return
+
+        # Cache once: arithmetic values may write flags and may themselves load
+        # the destination, so re-evaluating per byte would be incorrect.
+        cached = LLIL_TEMP(il.temp_reg_count)
+        il.append(il.set_reg(size, cached, value))
+        for byte_offset in range(size):
+            byte = il.logical_shift_right(
+                size, il.reg(size, cached), il.const(1, byte_offset * 8)
+            )
+            byte = il.low_part(1, byte)
+            byte_addr = self._lift_mem_byte_addr(il, addr, byte_offset)
+            il.append(il.store(1, byte_addr, byte))
+
+    def _lift_flags_word(self, il):
+        # The original 8086 manual specifies reserved FLAGS bits as
+        # indeterminate when stored.  Keep the defined flag bits precise while
+        # avoiding later-processor fixed-bit assumptions.
+        reserved = il.and_expr(2, il.undefined(), il.const(2, 0xf02a))
+        flags = reserved
+        for flag, flag_bit in flags_bits:
+            flags = il.or_expr(2, il.flag_bit(2, flag, flag_bit), flags)
+        return flags
+
+    def _lift_interrupt(self, il, addr, instr_len, number):
+        """Save real-mode state and transfer through an interrupt vector."""
+        il.append(il.push(2, self._lift_flags_word(il)))
+        il.append(il.set_flag('t', il.const(1, 0)))
+        il.append(il.set_flag('i', il.const(1, 0)))
+        il.append(il.push(2, il.reg(2, 'cs')))
+        return_ip = self._near_target(addr, instr_len, 0) & 0xffff
+        il.append(il.push(2, il.const(2, return_ip)))
+        vector_addr = self._const_addr(il, builtins.int(number) * 4)
+        cs, ip = self._lift_load_far(il, vector_addr)
+        il.append(il.set_reg(2, 'cs', cs))
+        il.append(il.jump(self._lift_phys_addr(il, cs, ip)))
 
 
 class Prefix(Instruction):
@@ -270,24 +352,37 @@ class Prefix(Instruction):
             self.next = Instruction(decoder)
         except KeyError:
             self.next = Instruction()
-        self.next.decode(decoder, addr)
+        self.next.decode(decoder, self._near_target(addr, self.length(), 0))
 
     def encode(self, encoder, addr):
         Instruction.encode(self, encoder, addr)
-        self.next.encode(encoder, addr + 1)
+        self.next.encode(encoder, self._near_target(addr, self.length(), 0))
 
     def total_length(self):
-        return self.length() + self.next.length()
+        return self.length() + self.next.total_length()
+
+    def terminal_instruction(self):
+        instr = self.next
+        while isinstance(instr, Prefix):
+            instr = instr.next
+        return instr
+
+    def terminal_addr(self, addr):
+        instr = self
+        while isinstance(instr, Prefix):
+            addr = instr._near_target(addr, instr.length(), 0)
+            instr = instr.next
+        return instr, addr
 
     def analyze(self, info, addr):
         Instruction.analyze(self, info, addr)
-        self.next.analyze(info, addr + 1)
+        self.next.analyze(info, self._near_target(addr, self.length(), 0))
 
     def render(self, addr):
-        return self.next.render(addr + 1)
+        return self.next.render(self._near_target(addr, self.length(), 0))
 
     def lift(self, il, addr):
-        self.next.lift(il, addr + 1)
+        self.next.lift(il, self._near_target(addr, self.length(), 0))
 
 
 class InstrHasWidth(object):
@@ -361,13 +456,14 @@ class InstrHasDisp(InstrHasSegment):
         )
         return tokens
 
-    def _lift_mem(self, il, store=None):
+    def _lift_mem(self, il):
         w = self.width()
         phys = self._lift_phys_addr(il, self.segment(), il.const(2, self.disp))
-        if store is None:
-            return il.load(w, phys)
-        else:
-            return il.store(w, phys, store)
+        return self._lift_mem_load(il, w, phys)
+
+    def _lift_set_mem(self, il, value):
+        phys = self._lift_phys_addr(il, self.segment(), il.const(2, self.disp))
+        self._lift_mem_store(il, self.width(), phys, value)
 
 
 class InstrHasModRegRM(InstrHasSegment):
@@ -454,15 +550,12 @@ class InstrHasModRegRM(InstrHasSegment):
             ] + tokens
         return asm(*tokens)
 
-    def _lift_reg_mem(self, il, store=None, only_calc_addr=False):
+    def _lift_reg_mem(self, il, only_calc_addr=False):
         if self._mod_bits() == 0b11:
             if only_calc_addr:
                 # MOD=11 is not expressly prohibited for LEA in the manual.
                 return il.reg(2, self._reg2())
-            if store is None:
-                return il.reg(self.width(), self._reg2())
-            else:
-                return il.set_reg(self.width(), self._reg2(), store)
+            return il.reg(self.width(), self._reg2())
         elif self._mod_bits() == 0b00 and self._reg_mem_bits() == 0b110:
             offset = il.const(2, self.disp & 0xffff)
         else:
@@ -473,7 +566,18 @@ class InstrHasModRegRM(InstrHasSegment):
         if only_calc_addr:
             return offset
         phys = self._lift_phys_addr(il, self.segment(), offset)
-        if store is None:
-            return il.load(self.width(), phys)
-        else:
-            return il.store(self.width(), phys, store)
+        return self._lift_mem_load(il, self.width(), phys)
+
+    def _lift_set_reg_mem(self, il, value):
+        if self._mod_bits() == 0b11:
+            il.append(il.set_reg(self.width(), self._reg2(), value))
+            return
+        phys = self._lift_reg_mem_addr(il)
+        self._lift_mem_store(il, self.width(), phys, value)
+
+    def _lift_reg_mem_addr(self, il):
+        """Return the physical address of a memory operand without loading it."""
+        if self._mod_bits() == 0b11:
+            return None
+        offset = self._lift_reg_mem(il, only_calc_addr=True)
+        return self._lift_phys_addr(il, self.segment(), offset)

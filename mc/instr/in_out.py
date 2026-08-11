@@ -24,15 +24,15 @@ class Out(Instruction):
 
 class InOutImm:
     def length(self):
-        return Instruction.length(self) + self.width()
+        return Instruction.length(self) + 1
 
     def decode(self, decoder, addr):
         Instruction.decode(self, decoder, addr)
-        self.imm = decoder.immediate(self.width())
+        self.imm = decoder.immediate(1)
 
     def encode(self, encoder, addr):
         Instruction.encode(self, encoder, addr)
-        encoder.immediate(self.imm, self.width())
+        encoder.immediate(self.imm, 1)
 
 
 class InImm(InstrHasWidth, InOutImm, In):
@@ -41,7 +41,7 @@ class InImm(InstrHasWidth, InOutImm, In):
         tokens += asm(
             ('reg', self.dst_reg()),
             ('opsep', ', '),
-            ('int', fmt_hexW(self.imm, self.width()), self.imm)
+            ('int', fmt_hexW(self.imm, 1), self.imm)
         )
         return tokens
 
@@ -78,7 +78,7 @@ class OutImm(InstrHasWidth, InOutImm, Out):
     def render(self, addr):
         tokens = Out.render(self, addr)
         tokens += asm(
-            ('int', fmt_hexW(self.imm, self.width()), self.imm),
+            ('int', fmt_hexW(self.imm, 1), self.imm),
             ('opsep', ', '),
             ('reg', self.src_reg())
         )

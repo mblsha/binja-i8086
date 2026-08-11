@@ -72,10 +72,11 @@ def test_near_call_and_ret_propagate_status_flags() -> None:
     ]
 
     ret_llil = _lift_to_llil(arch, b"\xC3")
-    assert ret_llil == [
-        *_expected_flag_shadows(),
-        mllil("RET", [mllil("POP.w", [])]),
-    ]
+    assert ret_llil[: len(STATUS_FLAGS)] == _expected_flag_shadows()
+    assert ret_llil[len(STATUS_FLAGS)].op == "SET_REG.w"
+    assert ret_llil[len(STATUS_FLAGS)].ops[1] == mllil("POP.w", [])
+    assert ret_llil[-1].op == "RET"
+    assert "cs" in str(ret_llil[-1]).lower()
 
 
 def test_far_call_and_ret_include_flag_propagation() -> None:
@@ -97,7 +98,9 @@ def test_ret_pass_flags_can_be_disabled_per_arch_instance() -> None:
     assert call_llil == [mllil("CALL", [mllil("CONST_PTR.l", [0x1003])])]
 
     ret_llil = _lift_to_llil(arch, b"\xC3")
-    assert ret_llil == [mllil("RET", [mllil("POP.w", [])])]
+    assert [node.op for node in ret_llil] == ["SET_REG.w", "RET"]
+    assert ret_llil[0].ops[1] == mllil("POP.w", [])
+    assert "cs" in str(ret_llil[-1]).lower()
 
 
 def test_ret_pass_flags_fallback_for_x86_16_core_style_arch() -> None:
@@ -113,10 +116,10 @@ def test_ret_pass_flags_fallback_for_x86_16_core_style_arch() -> None:
     ]
 
     ret_llil = _lift_to_llil(arch, b"\xC3")
-    assert ret_llil == [
-        *_expected_flag_shadows(),
-        mllil("RET", [mllil("POP.w", [])]),
-    ]
+    assert ret_llil[: len(STATUS_FLAGS)] == _expected_flag_shadows()
+    assert ret_llil[len(STATUS_FLAGS)].op == "SET_REG.w"
+    assert ret_llil[len(STATUS_FLAGS)].ops[1] == mllil("POP.w", [])
+    assert ret_llil[-1].op == "RET"
 
 
 def test_signed_branch_after_call_uses_restored_signed_flags() -> None:

@@ -94,7 +94,7 @@ class Intel8086(Architecture):
     ]
     flag_roles = {
         'c': FlagRole.CarryFlagRole,
-        'p': FlagRole.OddParityFlagRole,
+        'p': FlagRole.EvenParityFlagRole,
         'a': FlagRole.HalfCarryFlagRole,
         'z': FlagRole.ZeroFlagRole,
         's': FlagRole.NegativeSignFlagRole,
@@ -108,11 +108,17 @@ class Intel8086(Architecture):
         '*',
         '!c',
         'co',
+        'shift',
+        'psz',
+        'logic',
     ]
     flags_written_by_flag_write_type = {
         '*':  ['c', 'p', 'a', 'z', 's', 'o'],
         '!c': ['p', 'a', 'z', 's', 'o'],
         'co': ['c', 'o'],
+        'shift': ['c', 'p', 'z', 's', 'o'],
+        'psz': ['p', 'z', 's'],
+        'logic': ['p', 'z', 's'],
     }
     flags_required_for_flag_condition = {
         LowLevelILFlagCondition.LLFC_E:   ['z'],
@@ -134,8 +140,11 @@ class Intel8086(Architecture):
     intrinsics = {
         'outb': IntrinsicInfo([Type.int(2), Type.int(1)], []),
         'outw': IntrinsicInfo([Type.int(2), Type.int(2)], []),
-        'inb': IntrinsicInfo([Type.int(1)], [Type.int(2)]),
+        'inb': IntrinsicInfo([Type.int(2)], [Type.int(1)]),
         'inw': IntrinsicInfo([Type.int(2)], [Type.int(2)]),
+        'esc': IntrinsicInfo([Type.int(2), Type.int(3)], []),
+        'hlt': IntrinsicInfo([], []),
+        'wait': IntrinsicInfo([], []),
     }
 
     ret_status_flags = RET_STATUS_FLAGS
@@ -256,11 +265,6 @@ class Intel8086(Architecture):
             return None
         lhs = self._normalize_flag_operand(il, w, operands[0])
         rhs = self._normalize_flag_operand(il, w, operands[1])
-
-        if op in (LowLevelILOperation.LLIL_AND, LowLevelILOperation.LLIL_OR, LowLevelILOperation.LLIL_XOR):
-            # AF is undefined for logical ops on x86; use a stable 0 to avoid
-            # polluting MLIL/HLIL with "unimplemented" pseudo-ops.
-            return il.const(1, 0)
 
         if op == LowLevelILOperation.LLIL_ADD:
             result = il.add(w, lhs, rhs)

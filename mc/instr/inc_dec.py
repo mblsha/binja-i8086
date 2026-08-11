@@ -30,7 +30,10 @@ class IncDecReg(IncDec):
 
     def lift(self, il, addr):
         value = il.reg(2, self.reg())
-        value = il.add(2, value, il.const(2, self.delta()), '!c')
+        if self.name() == 'dec':
+            value = il.sub(2, value, il.const(2, 1), '!c')
+        else:
+            value = il.add(2, value, il.const(2, 1), '!c')
         il.append(il.set_reg(2, self.reg(), value))
 
 
@@ -49,5 +52,8 @@ class IncDecRM(InstrHasModRegRM, InstrHasWidth, IncDec):
     def lift(self, il, addr):
         w = self.width()
         value = self._lift_reg_mem(il)
-        value = il.add(w, value, il.const(w, self.delta()), '!c')
-        il.append(self._lift_reg_mem(il, store=value))
+        if self.name() == 'dec':
+            value = il.sub(w, value, il.const(w, 1), '!c')
+        else:
+            value = il.add(w, value, il.const(w, 1), '!c')
+        self._lift_set_reg_mem(il, value)

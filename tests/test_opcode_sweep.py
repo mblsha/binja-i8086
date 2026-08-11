@@ -9,9 +9,6 @@ from binja_i8086.architecture import Intel8086
 
 
 BASE = 0x4000
-EXPECTED_UNSUPPORTED_OPCODES = {0x27, 0x2F, 0x37, 0x3F, 0xD4, 0xD5}
-
-
 def _candidate_streams(opcode: int) -> Iterable[bytes]:
     # Fast path candidates that cover many fixed/immediate/modrm forms.
     seeds = [
@@ -49,10 +46,6 @@ def test_decode_encode_render_analyze_lift_across_opcode_space() -> None:
     il_count = 0
 
     for opcode in range(256):
-        if opcode in EXPECTED_UNSUPPORTED_OPCODES:
-            # Current plugin behavior: these legacy adjust opcodes are not
-            # modeled yet, so they intentionally decode as unknown.
-            continue
         blob = _find_decodable_stream(opcode)
         decoded = mc.decode(blob, BASE)
         assert decoded is not None
@@ -85,5 +78,5 @@ def test_decode_encode_render_analyze_lift_across_opcode_space() -> None:
         il_count += len(il.ils)
 
     # Guardrails to ensure this remains a broad behavior gate.
-    assert decoded_count == 256 - len(EXPECTED_UNSUPPORTED_OPCODES)
+    assert decoded_count == 256
     assert il_count > 256

@@ -16,7 +16,7 @@ class Intel8086CallingConvention(CallingConvention):
     high_int_return_reg = 'dx'
     float_return_reg = None
     global_pointer_reg = None
-    implicitly_defined_regs = []
+    implicitly_defined_regs = ['rc', 'rp', 'ra', 'rz', 'rs', 'ro']
 
     def _has_arch_reg(self, reg):
         if not isinstance(reg, str):
