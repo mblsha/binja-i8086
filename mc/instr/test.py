@@ -11,9 +11,10 @@ class Test(Instruction):
         return 'test'
 
     def _append_test_flag_fixups(self, il):
-        # x86 TEST clears carry/overflow while setting PF/AF/ZF/SF.
+        # TEST clears CF/OF, defines PF/ZF/SF, and leaves AF undefined.
         il.append(il.set_flag('c', il.const(1, 0)))
         il.append(il.set_flag('o', il.const(1, 0)))
+        il.append(il.set_flag('a', il.undefined()))
 
 
 class TestAccImm(InstrHasImm, InstrHasWidth, Test):
@@ -31,7 +32,7 @@ class TestAccImm(InstrHasImm, InstrHasWidth, Test):
 
     def lift(self, il, addr):
         w = self.width()
-        il.append(il.and_expr(w, il.reg(w, self.reg()), il.const(w, self.imm), '!c'))
+        il.append(il.and_expr(w, il.reg(w, self.reg()), il.const(w, self.imm), 'logic'))
         self._append_test_flag_fixups(il)
 
 
@@ -47,7 +48,7 @@ class TestRMImm(InstrHasImm, InstrHasModRegRM, InstrHasWidth, Test):
 
     def lift(self, il, addr):
         w = self.width()
-        il.append(il.and_expr(w, self._lift_reg_mem(il), il.const(w, self.imm), '!c'))
+        il.append(il.and_expr(w, self._lift_reg_mem(il), il.const(w, self.imm), 'logic'))
         self._append_test_flag_fixups(il)
 
 
@@ -63,5 +64,5 @@ class TestRMReg(InstrHasModRegRM, InstrHasWidth, Test):
 
     def lift(self, il, addr):
         w = self.width()
-        il.append(il.and_expr(w, self._lift_reg_mem(il), il.reg(w, self._reg()), '!c'))
+        il.append(il.and_expr(w, self._lift_reg_mem(il), il.reg(w, self._reg()), 'logic'))
         self._append_test_flag_fixups(il)

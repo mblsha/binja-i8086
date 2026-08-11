@@ -1,3 +1,5 @@
+from binaryninja.lowlevelil import LLIL_TEMP, LowLevelILLabel
+
 from ..helpers import *
 from ..tables import *
 from . import *
@@ -17,9 +19,7 @@ class AluLogic(InstrHasWidth, Instruction):
         return self.name() in ('or', 'and', 'xor')
 
     def _logic_flag_write(self):
-        # Logical ops define PF/AF/ZF/SF from the result while CF/OF are
-        # deterministically cleared.
-        return '!c' if self._is_logic_op() else '*'
+        return 'logic' if self._is_logic_op() else '*'
 
     def _append_logic_flag_fixups(self, il):
         if not self._is_logic_op():
@@ -27,6 +27,7 @@ class AluLogic(InstrHasWidth, Instruction):
         # x86 logical ops clear carry/overflow deterministically.
         il.append(il.set_flag('c', il.const(1, 0)))
         il.append(il.set_flag('o', il.const(1, 0)))
+        il.append(il.set_flag('a', il.undefined()))
 
     def _op(self, il, lhs, rhs):
         if self.name() == 'add':
@@ -66,7 +67,7 @@ class AluLogicRMReg(InstrHasModRegRM, AluLogic):
         w = self.width()
         result = self._op(il, self._lift_reg_mem(il), il.reg(w, self.src_reg()))
         if result is not None:
-            il.append(self._lift_reg_mem(il, store=result))
+            self._lift_set_reg_mem(il, result)
             self._append_logic_flag_fixups(il)
 
 
@@ -161,7 +162,7 @@ class AluLogicRMImm(InstrHasModRegRM, AluLogic):
             rhs = il.sign_extend(w, rhs)
         result = self._op(il, lhs, rhs)
         if result is not None:
-            il.append(self._lift_reg_mem(il, store=result))
+            self._lift_set_reg_mem(il, result)
             self._append_logic_flag_fixups(il)
 
 
@@ -180,10 +181,8 @@ class AluShiftRM(InstrHasModRegRM, InstrHasWidth, Instruction):
 
     def render(self, addr):
         tokens = Instruction.render(self, addr)
-        tokens += asm(
-            ('reg', self.dst_reg()),
-            ('opsep', ', ')
-        )
+        tokens += self._render_reg_mem()
+        tokens += asm(('opsep', ', '))
         if self.src_reg():
             tokens += asm(('reg', self.src_reg()))
         else:
@@ -194,8 +193,21 @@ class AluShiftRM(InstrHasModRegRM, InstrHasWidth, Instruction):
         w = self.width()
         lhs = self._lift_reg_mem(il)
         rhs = il.reg(1, self.src_reg()) if self.src_reg() else il.const(1, 1)
-
         name = self.name()
+        if name not in ('rol', 'ror', 'rcl', 'rcr', 'shl', 'shr', 'sar'):
+            il.append(il.undefined())
+            return
+
+        done = None
+        if self.src_reg():
+            # A zero count performs no operation and preserves every flag.
+            # Keep the flag-writing shift/rotate expression off that path.
+            execute = LowLevelILLabel()
+            done = LowLevelILLabel()
+            nonzero = il.compare_not_equal(1, rhs, il.const(1, 0))
+            il.append(il.if_expr(nonzero, execute, done))
+            il.mark_label(execute)
+
         if name == 'rol':
             result = il.rotate_left(w, lhs, rhs, 'co')
         elif name == 'ror':
@@ -205,15 +217,28 @@ class AluShiftRM(InstrHasModRegRM, InstrHasWidth, Instruction):
         elif name == 'rcr':
             result = il.rotate_right_carry(w, lhs, rhs, il.flag('c'), 'co')
         elif name == 'shl':
-            result = il.shift_left(w, lhs, rhs, 'co')
+            result = il.shift_left(w, lhs, rhs, 'shift')
         elif name == 'shr':
-            result = il.logical_shift_right(w, lhs, rhs, 'co')
+            result = il.logical_shift_right(w, lhs, rhs, 'shift')
         elif name == 'sar':
-            result = il.arith_shift_right(w, lhs, rhs, '*')
-        else:
-            il.append(il.undefined())
+            result = il.arith_shift_right(w, lhs, rhs, 'shift')
+        self._lift_set_reg_mem(il, result)
+        if name in ('shl', 'shr', 'sar'):
+            il.append(il.set_flag('a', il.undefined()))
+
+        if done is None:
             return
-        il.append(self._lift_reg_mem(il, store=result))
+
+        # OF is defined only for a count of one.  Count zero already bypasses
+        # the operation above, so every remaining non-one count is multibit.
+        one = LowLevelILLabel()
+        multibit = LowLevelILLabel()
+        il.append(il.if_expr(il.compare_equal(1, rhs, il.const(1, 1)), one, multibit))
+        il.mark_label(multibit)
+        il.append(il.set_flag('o', il.undefined()))
+        il.append(il.goto(done))
+        il.mark_label(one)
+        il.mark_label(done)
 
 
 class AluArithRegMem(InstrHasModRegRM, InstrHasWidth, Instruction):
@@ -229,31 +254,46 @@ class AluArithRegMem(InstrHasModRegRM, InstrHasWidth, Instruction):
         w = self.width()
         name = self.name()
         if name == 'not':
-            il.append(self._lift_reg_mem(il, store=il.not_expr(w, self._lift_reg_mem(il))))
+            self._lift_set_reg_mem(il, il.not_expr(w, self._lift_reg_mem(il)))
         elif name == 'neg':
-            il.append(self._lift_reg_mem(il, store=il.neg_expr(w, self._lift_reg_mem(il))))
+            self._lift_set_reg_mem(il, il.neg_expr(w, self._lift_reg_mem(il), flags='*'))
         elif name in ('mul', 'imul'):
             accum  = il.reg(w, 'ax') if w == 2 else il.reg(w, 'al')
-            # TODO: there's only one mult in LLIL, what gives?
-            result = il.mult(w * 2, accum, self._lift_reg_mem(il))
-            if w == 2:
-                il.append(il.set_reg_split(w * 2, 'dx', 'ax', result))
+            if name == 'imul':
+                result = il.mult_double_prec_signed(w, accum, self._lift_reg_mem(il), flags='co')
             else:
-                il.append(il.set_reg(w, 'ax', result))
+                result = il.mult_double_prec_unsigned(w, accum, self._lift_reg_mem(il), flags='co')
+            if w == 2:
+                il.append(il.set_reg_split(w, 'dx', 'ax', result))
+            else:
+                il.append(il.set_reg(2, 'ax', result))
+            for flag in ('p', 'a', 'z', 's'):
+                il.append(il.set_flag(flag, il.undefined()))
         elif name in ('div', 'idiv'):
-            dividend = il.reg_split(w * 2, 'dx', 'ax') if w == 2 else il.reg(w * 2, 'ax')
-            divisor  = self._lift_reg_mem(il)
+            dividend = il.reg_split(w, 'dx', 'ax') if w == 2 else il.reg(w * 2, 'ax')
+            divisor = LLIL_TEMP(il.temp_reg_count)
+            il.append(il.set_reg(w, divisor, self._lift_reg_mem(il)))
             if name == 'div':
-                quotinent = il.div_unsigned(w, dividend, divisor)
-                remainder = il.mod_unsigned(w, dividend, divisor)
+                quotient_expr = il.div_double_prec_unsigned(w, dividend, il.reg(w, divisor))
+                remainder_expr = il.mod_double_prec_unsigned(w, dividend, il.reg(w, divisor))
             else:
-                quotinent = il.div_signed(w, dividend, divisor)
-                remainder = il.mod_signed(w, dividend, divisor)
+                quotient_expr = il.div_double_prec_signed(w, dividend, il.reg(w, divisor))
+                remainder_expr = il.mod_double_prec_signed(w, dividend, il.reg(w, divisor))
+            quotient = LLIL_TEMP(il.temp_reg_count)
+            il.append(il.set_reg(w, quotient, quotient_expr))
+            # ``temp_reg_count`` is the number of temporaries already present
+            # in the function, not an allocator.  Append the quotient write
+            # before asking for the remainder temporary so the two results do
+            # not alias in real Binary Ninja LLIL.
+            remainder = LLIL_TEMP(il.temp_reg_count)
+            il.append(il.set_reg(w, remainder, remainder_expr))
             if w == 2:
-                il.append(il.set_reg(w, 'ax', quotinent))
-                il.append(il.set_reg(w, 'dx', remainder))
+                il.append(il.set_reg(w, 'ax', il.reg(w, quotient)))
+                il.append(il.set_reg(w, 'dx', il.reg(w, remainder)))
             else:
-                il.append(il.set_reg(w, 'al', quotinent))
-                il.append(il.set_reg(w, 'ah', remainder))
+                il.append(il.set_reg(w, 'al', il.reg(w, quotient)))
+                il.append(il.set_reg(w, 'ah', il.reg(w, remainder)))
+            for flag in ('c', 'p', 'a', 'z', 's', 'o'):
+                il.append(il.set_flag(flag, il.undefined()))
         else:
             il.append(il.undefined())

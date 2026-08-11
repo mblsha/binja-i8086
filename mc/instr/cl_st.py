@@ -27,7 +27,7 @@ class Cmc(Instruction):
         return 'cmc'
 
     def lift(self, il, addr):
-        il.append(il.set_flag('c', il.neg_expr(1, il.flag('c'))))
+        il.append(il.set_flag('c', il.xor_expr(1, il.flag('c'), il.const(1, 1))))
 
 
 class Cli(Instruction):

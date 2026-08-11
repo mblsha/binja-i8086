@@ -12,19 +12,10 @@ __all__ = ['IntImm', 'Int3', 'Into']
 class Int(Instruction):
     def analyze(self, info, addr):
         Instruction.analyze(self, info, addr)
-        info.add_branch(BranchType.SystemCall, 4 * self.number)
+        info.add_branch(BranchType.SystemCall)
 
     def lift(self, il, addr):
-        if self.number == 3:
-            il.append(il.breakpoint())
-        else:
-            # This *is* a trap, but if we lift it as a trap, BN assumes that execution
-            # will not continue afterwards. So, to aid analysis, we add an explicit call
-            # to the vector.
-            # Not quite semantically correct, but good enough and useful.
-            # TODO: represent this as a system call
-            cs, ip = self._lift_load_far(il, il.const_pointer(2, self.number * 4))
-            il.append(il.call(self._lift_phys_addr(il, cs, ip)))
+        self._lift_interrupt(il, addr, self.length(), self.number)
 
 
 class IntImm(Int):

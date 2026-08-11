@@ -29,7 +29,7 @@ class CallFarImm(Call):
         encoder.unsigned_word(self.cs)
 
     def target(self):
-        return (self.cs << 4) + self.ip
+        return ((self.cs << 4) + self.ip) & 0xfffff
 
     def analyze(self, info, addr):
         Call.analyze(self, info, addr)
@@ -45,10 +45,10 @@ class CallFarImm(Call):
         return tokens
 
     def lift(self, il, addr):
-        # CS is (if the calling convention matches, anyway) popped by the callee, but we
-        # explicitly restore it at the call site because the callee may not be statically
-        # known, and that it restores CS is a safe assumption.
-        # Not quite semantically correct, but good enough and useful.
+        # A far call pushes CS before the ordinary return IP.  LLIL_CALL
+        # abstracts the callee and resumes on the returned path, so restore the
+        # caller's CS there while the extra stack adjustment models RETF's CS
+        # pop.
         temp = LLIL_TEMP(il.temp_reg_count)
         il.append(il.set_reg(2, temp, il.reg(2, 'cs')))
         il.append(il.push(2, il.reg(2, 'cs')))
@@ -61,8 +61,7 @@ class CallFarImm(Call):
 class CallFarMem(InstrHasModRegRM, Instr16Bit, Call):
     def analyze(self, info, addr):
         Call.analyze(self, info, addr)
-        # FIXME: what should we do for indirect calls?
-        # info.add_branch(BranchType.CallDestination)
+        info.add_branch(BranchType.CallDestination)
 
     def render(self, addr):
         if self._mod_bits() == 0b11:
@@ -81,11 +80,11 @@ class CallFarMem(InstrHasModRegRM, Instr16Bit, Call):
             il.append(il.undefined())
             return
 
-        cs, ip = self._lift_load_far(il, self._lift_reg_mem(il))
-        il.append(il.set_reg(2, 'cs', cs))
+        cs, ip = self._lift_load_far(il, self._lift_reg_mem_addr(il))
         old_cs = LLIL_TEMP(il.temp_reg_count)
         il.append(il.set_reg(2, old_cs, il.reg(2, 'cs')))
-        il.append(il.push(2, il.reg(2, 'cs')))
+        il.append(il.push(2, il.reg(2, old_cs)))
+        il.append(il.set_reg(2, 'cs', cs))
         il.append(il.call_stack_adjust(self._lift_phys_addr(il, cs, ip), 2))
         il.append(il.set_reg(2, 'cs', il.reg(2, old_cs)))
         self._lift_restore_status_flags(il)
@@ -97,21 +96,21 @@ class CallNearImm(Call):
 
     def decode(self, decoder, addr):
         Call.decode(self, decoder, addr)
-        self.ip = addr + self.length() + decoder.signed_word()
+        self.ip = self._near_target(addr, self.length(), decoder.signed_word())
 
     def encode(self, encoder, addr):
         Call.encode(self, encoder, addr)
-        encoder.signed_word(self.ip - addr - self.length())
+        encoder.signed_word(self._near_displacement(addr, self.length(), self.ip))
 
     def analyze(self, info, addr):
         Call.analyze(self, info, addr)
         info.add_branch(BranchType.CallDestination, self.ip)
 
     def render(self, addr):
-        ip_rel = self.ip - addr
+        ip_rel = self._near_displacement(addr, 0, self.ip)
         tokens = Call.render(self, addr)
         tokens += asm(
-            ('codeRelAddr', fmt_code_rel(ip_rel), ip_rel),
+            ('codeRelAddr', fmt_code_rel(ip_rel), self.ip),
         )
         return tokens
 
@@ -121,9 +120,6 @@ class CallNearImm(Call):
 
 
 class CallNearRM(InstrHasModRegRM, Instr16Bit, Call):
-    def _default_segment(self):
-        return 'cs'
-
     def analyze(self, info, addr):
         Call.analyze(self, info, addr)
         info.add_branch(BranchType.CallDestination)
@@ -182,7 +178,7 @@ class CallNearRM(InstrHasModRegRM, Instr16Bit, Call):
             return None
         if not (self._mod_bits() == 0b00 and self._reg_mem_bits() == 0b110):
             return None
-        if self.segment() != "cs":
+        if self.segment_override != "cs":
             return None
 
         view = self._view_from_il(il)
@@ -208,5 +204,6 @@ class CallNearRM(InstrHasModRegRM, Instr16Bit, Call):
                 self._lift_restore_status_flags(il)
                 return
 
-        il.append(il.call(self._lift_phys_addr(il, self.segment(), self._lift_reg_mem(il))))
+        target_off = self._lift_reg_mem(il)
+        il.append(il.call(self._lift_phys_addr(il, 'cs', target_off)))
         self._lift_restore_status_flags(il)

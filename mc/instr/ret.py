@@ -28,9 +28,7 @@ class RetImm(InstrHasImm, Ret):
 
     def render(self, addr):
         tokens = Ret.render(self, addr)
-        tokens += [
-            ('int', fmt_imm(self.imm), self.imm),
-        ]
+        tokens += asm(('int', fmt_imm(self.imm), self.imm))
         return tokens
 
 
@@ -41,6 +39,7 @@ class RetFar(Ret):
         il.append(il.set_reg(2, ip, il.pop(2)))
         cs = LLIL_TEMP(il.temp_reg_count)
         il.append(il.set_reg(2, cs, il.pop(2)))
+        il.append(il.set_reg(2, 'cs', il.reg(2, cs)))
         il.append(il.ret(self._lift_phys_addr(il, il.reg(2, cs), il.reg(2, ip))))
 
 
@@ -52,6 +51,7 @@ class RetFarImm(RetImm):
         cs = LLIL_TEMP(il.temp_reg_count)
         il.append(il.set_reg(2, cs, il.pop(2)))
         il.append(il.set_reg(2, 'sp', il.add(2, il.reg(2, 'sp'), il.const(2, self.imm))))
+        il.append(il.set_reg(2, 'cs', il.reg(2, cs)))
         il.append(il.ret(self._lift_phys_addr(il, il.reg(2, cs), il.reg(2, ip))))
 
 
@@ -66,19 +66,22 @@ class Iret(Ret):
         for flag, flag_bit in flags_bits:
             bit = il.test_bit(2, il.reg(2, flags), il.const(2, flag_bit))
             il.append(il.set_flag(flag, bit))
+        il.append(il.set_reg(2, 'cs', il.reg(2, cs)))
         il.append(il.ret(self._lift_phys_addr(il, il.reg(2, cs), il.reg(2, ip))))
 
 
 class RetNear(Ret):
     def lift(self, il, addr):
         self._lift_shadow_status_flags(il)
-        ip = il.pop(2)
-        il.append(il.ret(ip))
+        ip = LLIL_TEMP(il.temp_reg_count)
+        il.append(il.set_reg(2, ip, il.pop(2)))
+        il.append(il.ret(self._lift_phys_addr(il, 'cs', il.reg(2, ip))))
 
 
 class RetNearImm(RetImm):
     def lift(self, il, addr):
         self._lift_shadow_status_flags(il)
-        ip = il.pop(2)
+        ip = LLIL_TEMP(il.temp_reg_count)
+        il.append(il.set_reg(2, ip, il.pop(2)))
         il.append(il.set_reg(2, 'sp', il.add(2, il.reg(2, 'sp'), il.const(2, self.imm))))
-        il.append(il.ret(ip))
+        il.append(il.ret(self._lift_phys_addr(il, 'cs', il.reg(2, ip))))

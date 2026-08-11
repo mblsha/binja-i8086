@@ -19,4 +19,4 @@ class Cwd(Instruction):
         return 'cwd'
 
     def lift(self, il, addr):
-        il.append(il.set_reg_split(4, 'dx', 'ax', il.sign_extend(4, il.reg(2, 'ax'))))
+        il.append(il.set_reg_split(2, 'dx', 'ax', il.sign_extend(4, il.reg(2, 'ax'))))

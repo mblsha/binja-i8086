@@ -42,9 +42,9 @@ def _lift_jump_expr(data: bytes, addr: int, view: FakeView | None, arch: Intel80
     return jump_expr.ops[0]
 
 
-def test_jmp_near_rm_default_cs_table_resolves_to_const_pointer() -> None:
-    # FF 26 32 60 => jmp word [0x6032], default segment is CS.
-    data = bytes.fromhex("ff263260")
+def test_jmp_near_rm_explicit_cs_table_resolves_to_const_pointer() -> None:
+    # 2E FF 26 32 60 => jmp word [cs:0x6032].
+    data = bytes.fromhex("2eff263260")
     addr = 0x1A51E
     view = FakeView({0x16032: 0xD5, 0x16033: 0x96})
 
@@ -55,7 +55,7 @@ def test_jmp_near_rm_default_cs_table_resolves_to_const_pointer() -> None:
 
 
 def test_jmp_near_rm_cs_table_zero_entry_stays_indirect() -> None:
-    data = bytes.fromhex("ff263260")
+    data = bytes.fromhex("2eff263260")
     addr = 0x1A51E
     view = FakeView({0x16032: 0x00, 0x16033: 0x00})
 
@@ -65,7 +65,7 @@ def test_jmp_near_rm_cs_table_zero_entry_stays_indirect() -> None:
 
 
 def test_jmp_near_rm_cs_table_lift_can_be_disabled() -> None:
-    data = bytes.fromhex("ff263260")
+    data = bytes.fromhex("2eff263260")
     addr = 0x1A51E
     view = FakeView({0x16032: 0xD5, 0x16033: 0x96})
     arch = Intel8086()
@@ -77,7 +77,7 @@ def test_jmp_near_rm_cs_table_lift_can_be_disabled() -> None:
 
 
 def test_jmp_near_rm_cs_table_lift_disabled_by_vanilla_arch() -> None:
-    data = bytes.fromhex("ff263260")
+    data = bytes.fromhex("2eff263260")
     addr = 0x1A51E
     view = FakeView({0x16032: 0xD5, 0x16033: 0x96})
 
@@ -86,8 +86,8 @@ def test_jmp_near_rm_cs_table_lift_disabled_by_vanilla_arch() -> None:
     assert target_expr.op != "CONST_PTR.l"
 
 def test_jmp_near_rm_cs_table_prefers_page_base_over_overlay_segment() -> None:
-    # FF 26 04 30 => jmp word [0x3004], default segment is CS.
-    data = bytes.fromhex("ff260430")
+    # 2E FF 26 04 30 => jmp word [cs:0x3004].
+    data = bytes.fromhex("2eff260430")
     addr = 0x1A51E
     view = FakeView(
         {0x13004: 0x29, 0x13005: 0x3F},

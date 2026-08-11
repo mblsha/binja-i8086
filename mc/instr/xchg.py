@@ -59,7 +59,20 @@ class XchgRegRM(InstrHasModRegRM, InstrHasWidth, Xchg):
 
     def lift(self, il, addr):
         w = self.width()
+        if self._mod_bits() == 0b11:
+            temp = LLIL_TEMP(il.temp_reg_count)
+            il.append(il.set_reg(w, temp, il.reg(w, self.regL())))
+            il.append(il.set_reg(w, self.regL(), self._lift_reg_mem(il)))
+            self._lift_set_reg_mem(il, il.reg(w, temp))
+            return
+
+        # Cache both the address and loaded value before changing a register
+        # that may participate in the effective address (e.g. xchg bx,[bx]).
+        ea = LLIL_TEMP(il.temp_reg_count)
+        il.append(il.set_reg(3, ea, self._lift_reg_mem_addr(il)))
         temp = LLIL_TEMP(il.temp_reg_count)
         il.append(il.set_reg(w, temp, il.reg(w, self.regL())))
-        il.append(il.set_reg(w, self.regL(), self._lift_reg_mem(il)))
-        il.append(self._lift_reg_mem(il, store=il.reg(w, temp)))
+        value = LLIL_TEMP(il.temp_reg_count)
+        il.append(il.set_reg(w, value, self._lift_mem_load(il, w, il.reg(3, ea))))
+        il.append(il.set_reg(w, self.regL(), il.reg(w, value)))
+        self._lift_mem_store(il, w, il.reg(3, ea), il.reg(w, temp))

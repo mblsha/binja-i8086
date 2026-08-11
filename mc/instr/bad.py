@@ -15,5 +15,4 @@ class Unassigned(Instruction):
 
 
 class UnassignedRM(InstrHasModRegRM, Unassigned):
-    def length(self):
-        return 2
+    pass

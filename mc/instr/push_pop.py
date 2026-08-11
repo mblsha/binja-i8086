@@ -1,3 +1,4 @@
+from binaryninja.enums import BranchType
 from binaryninja.lowlevelil import LLIL_TEMP
 
 from ..helpers import *
@@ -6,7 +7,7 @@ from . import *
 
 
 __all__ = ['PushReg', 'PopReg',
-           'PushSeg', 'PopSeg',
+           'PushSeg', 'PopSeg', 'PopCS',
            'PushRM',  'PopRM',
            'PushF',   'PopF']
 
@@ -28,7 +29,12 @@ class PushReg(PushPopReg):
         return 'push'
 
     def lift(self, il, addr):
-        il.append(il.push(2, il.reg(2, self.reg())))
+        value = il.reg(2, self.reg())
+        if self.reg() == 'sp':
+            # On the original 8086, SP is decremented before the source value
+            # is read, so PUSH SP stores the new SP (unlike later x86 CPUs).
+            value = il.sub(2, value, il.const(2, 2))
+        il.append(il.push(2, value))
 
 
 class PopReg(PushPopReg):
@@ -52,6 +58,24 @@ class PopSeg(PushPopSeg, PopReg):
     pass
 
 
+class PopCS(PopSeg):
+    """The original 8086 opcode 0F (removed on later x86 processors)."""
+
+    def reg(self):
+        return 'cs'
+
+    def analyze(self, info, addr):
+        Instruction.analyze(self, info, addr)
+        info.add_branch(BranchType.IndirectBranch)
+
+    def lift(self, il, addr):
+        new_cs = LLIL_TEMP(il.temp_reg_count)
+        il.append(il.set_reg(2, new_cs, il.pop(2)))
+        il.append(il.set_reg(2, 'cs', il.reg(2, new_cs)))
+        next_ip = (addr + self.length()) & 0xffff
+        il.append(il.jump(self._lift_phys_addr(il, il.reg(2, new_cs), il.const(2, next_ip))))
+
+
 class PushRM(InstrHasModRegRM, Instr16Bit, Instruction):
     def name(self):
         return 'push'
@@ -62,7 +86,10 @@ class PushRM(InstrHasModRegRM, Instr16Bit, Instruction):
         return tokens
 
     def lift(self, il, addr):
-        il.append(il.push(2, self._lift_reg_mem(il)))
+        value = self._lift_reg_mem(il)
+        if self._mod_bits() == 0b11 and self._reg2() == 'sp':
+            value = il.sub(2, value, il.const(2, 2))
+        il.append(il.push(2, value))
 
 
 class PopRM(InstrHasModRegRM, Instr16Bit, Instruction):
@@ -82,7 +109,9 @@ class PopRM(InstrHasModRegRM, Instr16Bit, Instruction):
             il.append(il.undefined())
             return
 
-        il.append(il.push(2, self._lift_reg_mem(il)))
+        value = LLIL_TEMP(il.temp_reg_count)
+        il.append(il.set_reg(2, value, il.pop(2)))
+        self._lift_set_reg_mem(il, il.reg(2, value))
 
 
 class PushF(Instruction):
@@ -90,14 +119,7 @@ class PushF(Instruction):
         return 'pushf'
 
     def lift(self, il, addr):
-        flags = None
-        for flag, flag_bit in flags_bits:
-            bit = il.flag_bit(2, flag, flag_bit)
-            if flags is None:
-                flags = bit
-            else:
-                flags = il.or_expr(2, bit, flags)
-        il.append(il.push(2, flags))
+        il.append(il.push(2, self._lift_flags_word(il)))
 
 
 class PopF(Instruction):
